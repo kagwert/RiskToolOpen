@@ -528,14 +528,16 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             % Row 1: Funded label
             app.SAAFundedLabel = uilabel(app.AllocGrid,'Text','Funded Allocations (sum to 100%)','FontWeight','bold');
             % Row 2: Funded assets table (hidden master SAATable still exists as data source)
-            app.SAATable = uitable(app.AllocGrid,'Data',table(),'ColumnEditable',[true true true],'FontSize',11);
-            app.SAATable.ColumnName = {'Asset','WeightPct','Description'};
+            app.SAATable = uitable(app.AllocGrid,'Data',table(),'ColumnEditable',[true true true true],'FontSize',11);
+            app.SAATable.ColumnName = {'Asset','WeightPct','Active','Description'};
+            app.SAATable.ColumnWidth = {'auto',70,50,'1x'};
             app.SAATable.CellEditCallback = @(s,e)onSAATableEdited(app);
             % Row 3: FX Overlay label
             app.SAAFXLabel = uilabel(app.AllocGrid,'Text','Overlay Positions (no sum constraint)','FontWeight','bold');
             % Row 4: FX overlay table
-            app.SAAFXTable = uitable(app.AllocGrid,'Data',table(),'ColumnEditable',[true true true],'FontSize',11);
-            app.SAAFXTable.ColumnName = {'Asset','WeightPct','Description'};
+            app.SAAFXTable = uitable(app.AllocGrid,'Data',table(),'ColumnEditable',[true true true true],'FontSize',11);
+            app.SAAFXTable.ColumnName = {'Asset','WeightPct','Active','Description'};
+            app.SAAFXTable.ColumnWidth = {'auto',70,50,'1x'};
             app.SAAFXTable.CellEditCallback = @(s,e)onSAAFXTableEdited(app);
             % Row 5: FX exposure summary
             app.FXExposureText = uitextarea(app.AllocGrid,'Editable','off','FontName','Consolas','FontSize',11, ...
@@ -886,6 +888,9 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             try
                 % Only optimize funded assets — overlays are set manually
                 selFunded = app.AssetsList.Value; if isempty(selFunded), selFunded = app.AssetsList.Items; end
+                activeNames = getActiveAssets(app);
+                selFunded = selFunded(ismember(selFunded, activeNames));
+                if isempty(selFunded), uialert(app.UIFigure,'No active assets selected.','No Assets'); return; end
                 idx = ismember(app.AssetNames, selFunded);
                 R = app.R(:,idx);
                 names = app.AssetNames(idx);
@@ -1843,9 +1848,14 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                 for ii = 1:numel(use)
                     if app.isFXOverlay(use{ii}), w(ii) = 0; end
                 end
-                app.SAA = table(string(use(:)), w, repmat("",numel(use),1), 'VariableNames',{'Asset','WeightPct','Description'});
+                app.SAA = table(string(use(:)), w, true(numel(use),1), repmat("",numel(use),1), 'VariableNames',{'Asset','WeightPct','Active','Description'});
                 updateFXOverlayDisplay(app);
             else
+                % Backward compat: add Active column if missing
+                if ~ismember('Active', app.SAA.Properties.VariableNames)
+                    app.SAA.Active = true(height(app.SAA), 1);
+                    app.SAA = app.SAA(:, {'Asset','WeightPct','Active','Description'});
+                end
                 updateFXOverlayDisplay(app);
             end
             if isempty(app.TAA) || ~ismember('Asset', app.TAA.Properties.VariableNames) || isempty(app.TAA.Asset)
@@ -1856,7 +1866,7 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
         end
 
         function resetSAA(app)
-            app.SAA = table(string.empty(0,1), zeros(0,1), strings(0,1), 'VariableNames',{'Asset','WeightPct','Description'});
+            app.SAA = table(string.empty(0,1), zeros(0,1), true(0,1), strings(0,1), 'VariableNames',{'Asset','WeightPct','Active','Description'});
             ensureSAAInitialized(app);
             updateSAAAnalytics(app);
             app.StatusLabel.Text = 'SAA reset to default.';
@@ -1946,10 +1956,11 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             if ~ismember('Asset', T.Properties.VariableNames) || ~ismember('DeltaPct', T.Properties.VariableNames)
                 uialert(app.UIFigure,'TAA must have columns Asset and DeltaPct.','TAA Error'); return;
             end
-            % Validate funded weights sum to ~100% (FX overlays excluded)
+            % Validate funded weights sum to ~100% (FX overlays and inactive excluded)
+            hasActive = ismember('Active', S.Properties.VariableNames);
             fundedSum = 0;
             for fi = 1:height(S)
-                if ~app.isFXOverlay(char(S.Asset(fi)))
+                if ~app.isFXOverlay(char(S.Asset(fi))) && (~hasActive || S.Active(fi))
                     fundedSum = fundedSum + S.WeightPct(fi);
                 end
             end
@@ -1968,10 +1979,13 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             % Map to current universe order
             Wpct = zeros(numel(app.AssetNames),1);
             missing = string.empty(0,1);
+            activeNames = getActiveAssets(app);
             for j=1:numel(app.AssetNames)
                 a = string(app.AssetNames{j});
                 k = find(allAssets==a,1);
                 if ~isempty(k), Wpct(j) = combPct(k); else, Wpct(j) = 0; end
+                % Zero out inactive assets
+                if ~ismember(app.AssetNames{j}, activeNames), Wpct(j) = 0; end
             end
             for j=1:numel(allAssets)
                 a = string(allAssets(j));
@@ -2269,10 +2283,18 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             if ~ismember('Asset', S.Properties.VariableNames) || ~ismember('WeightPct', S.Properties.VariableNames)
                 return;
             end
+            hasActive = ismember('Active', S.Properties.VariableNames);
             for j=1:N
                 a = string(app.AssetNames{j});
-                s = S.WeightPct(strcmp(string(S.Asset), a));
-                if ~isempty(s), w(j) = sum(s)/100; end
+                rowIdx = find(strcmp(string(S.Asset), a));
+                if ~isempty(rowIdx)
+                    % Skip inactive assets
+                    if hasActive && ~S.Active(rowIdx(1))
+                        w(j) = 0;
+                    else
+                        w(j) = sum(S.WeightPct(rowIdx))/100;
+                    end
+                end
             end
             % Normalize funded weights to sum to 1; FX overlays kept as fraction
             fundedW = 0;
@@ -2284,6 +2306,15 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                     if ~app.isFXOverlay(app.AssetNames{j2}), w(j2) = w(j2) / fundedW; end
                 end
             end
+        end
+
+        function names = getActiveAssets(app)
+            % Return cell array of asset names with Active=true in SAA
+            if isempty(app.SAA) || ~istable(app.SAA) || height(app.SAA) == 0 ...
+                    || ~ismember('Active', app.SAA.Properties.VariableNames)
+                names = app.AssetNames; return;
+            end
+            names = cellstr(app.SAA.Asset(app.SAA.Active));
         end
 
         function updateSummary(app)
@@ -2474,13 +2505,17 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                 % Combined TE
                 te_var_trade = max(0, wdiff_trade' * Sigma * wdiff_trade);
                 tTE(gi) = round(sqrt(te_var_trade) * sqrt(per) * 10000, 1);
-                % Combined equity beta: sum of (delta_i * beta_i)
-                if ~isempty(eqIdx)
-                    tBeta(gi) = round(wdiff_trade' * Sigma(:, eqIdx) / max(1e-20, Sigma(eqIdx, eqIdx)), 3);
+                % Combined equity beta: weighted average of per-asset betas by leg direction
+                % Normalize by sum of absolute deltas so beta reflects the trade, not the weight
+                sumAbsD = sum(abs(wdiff_trade));
+                if ~isempty(eqIdx) && sumAbsD > 1e-12
+                    assetBetas = Sigma(:, eqIdx) / max(1e-20, Sigma(eqIdx, eqIdx));
+                    tBeta(gi) = round((wdiff_trade' * assetBetas) / (sumAbsD / 2), 3);
                 end
-                % Combined USD sensitivity
-                if ~isempty(usdIdx)
-                    tUSD(gi) = round(wdiff_trade' * Sigma(:, usdIdx) / max(1e-20, Sigma(usdIdx, usdIdx)), 3);
+                % Combined USD sensitivity: same normalization
+                if ~isempty(usdIdx) && sumAbsD > 1e-12
+                    assetUSD = Sigma(:, usdIdx) / max(1e-20, Sigma(usdIdx, usdIdx));
+                    tUSD(gi) = round((wdiff_trade' * assetUSD) / (sumAbsD / 2), 3);
                 end
             end
             app.TAATradeTable.Data = table(groups(:), tLegs(:), tTE(:), tBeta(:), tUSD(:), ...
@@ -4239,9 +4274,20 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             exportgraphics(ax, pngPath, 'Resolution', 150);
         end
 
-        function texStr = tableToLaTeX(~, T, caption)
+        function texStr = tableToLaTeX(~, T, caption, opts)
             % Convert MATLAB table to LaTeX tabular string with booktabs
+            % opts.fontSize: 'small' (default), 'scriptsize', 'footnotesize'
+            % opts.numFmt: sprintf format for numbers, e.g. '%.1f'
+            % opts.landscape: true to wrap in landscape
             if nargin < 3, caption = ''; end
+            if nargin < 4, opts = struct(); end
+            fontSize = 'small';
+            if isfield(opts,'fontSize'), fontSize = opts.fontSize; end
+            numFmt = '';
+            if isfield(opts,'numFmt'), numFmt = opts.numFmt; end
+            useLandscape = false;
+            if isfield(opts,'landscape'), useLandscape = opts.landscape; end
+
             varNames = T.Properties.VariableNames;
             nCols = width(T);
 
@@ -4249,6 +4295,9 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             esc = @(s) strrep(strrep(strrep(strrep(string(s),'_','\_'),'%','\%'),'&','\&'),'#','\#');
 
             lines = {};
+            if useLandscape
+                lines{end+1} = '\begin{landscape}';
+            end
             if ~isempty(caption)
                 lines{end+1} = sprintf('\\subsection*{%s}', char(esc(caption)));
             end
@@ -4263,7 +4312,7 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                 end
             end
 
-            lines{end+1} = '\begingroup\small';
+            lines{end+1} = sprintf('\\begingroup\\%s', fontSize);
             lines{end+1} = sprintf('\\begin{tabular}{%s}', colSpec);
             lines{end+1} = '\toprule';
 
@@ -4280,7 +4329,9 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                 for j = 1:nCols
                     val = T{i,j};
                     if isnumeric(val)
-                        if abs(val) < 0.01 && val ~= 0
+                        if ~isempty(numFmt)
+                            cells{j} = sprintf(numFmt, val);
+                        elseif abs(val) < 0.01 && val ~= 0
                             cells{j} = sprintf('%.6f', val);
                         elseif abs(val) > 100
                             cells{j} = sprintf('%.1f', val);
@@ -4304,6 +4355,9 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             lines{end+1} = '\bottomrule';
             lines{end+1} = '\end{tabular}';
             lines{end+1} = '\endgroup';
+            if useLandscape
+                lines{end+1} = '\end{landscape}';
+            end
             lines{end+1} = '';
 
             texStr = strjoin(lines, newline);
@@ -4320,7 +4374,7 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             L{end+1} = '\documentclass[11pt,a4paper]{article}';
             L{end+1} = '\usepackage[margin=2cm]{geometry}';
             L{end+1} = '\setlength{\headheight}{13.6pt}';
-            L{end+1} = '\usepackage{graphicx,booktabs,float,xcolor,fancyhdr,longtable}';
+            L{end+1} = '\usepackage{graphicx,booktabs,float,xcolor,fancyhdr,longtable,lscape}';
             L{end+1} = '\usepackage[T1]{fontenc}';
             L{end+1} = '\usepackage{lmodern}';
             L{end+1} = '\pagestyle{fancy}';
@@ -4351,9 +4405,18 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                 L{end+1} = '\end{verbatim}}';
             end
 
-            % Weights table
+            % Weights table (convert to percentages)
             if app.uiValid(app.WeightsTable) && ~isempty(app.WeightsTable.Data)
-                L{end+1} = tableToLaTeX(app, app.WeightsTable.Data, 'Portfolio Weights & Risk Contribution');
+                Tw = app.WeightsTable.Data;
+                if ismember('Weight', Tw.Properties.VariableNames)
+                    Tw.Weight = Tw.Weight * 100;
+                    Tw.Properties.VariableNames{strcmp(Tw.Properties.VariableNames,'Weight')} = 'Weight_pct';
+                end
+                if ismember('RiskContribution', Tw.Properties.VariableNames)
+                    Tw.RiskContribution = Tw.RiskContribution * 100;
+                    Tw.Properties.VariableNames{strcmp(Tw.Properties.VariableNames,'RiskContribution')} = 'RiskContr_pct';
+                end
+                L{end+1} = tableToLaTeX(app, Tw, 'Portfolio Weights & Risk Contribution', struct('numFmt','%.2f'));
             end
 
             % === Section 2: SAA ===
@@ -4400,11 +4463,22 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
 
             % === Section 3: Combined Weights ===
             L{end+1} = '\section{Combined Weights (SAA + TAA)}';
-            if app.uiValid(app.CombinedTable) && ~isempty(app.CombinedTable.Data)
-                L{end+1} = tableToLaTeX(app, app.CombinedTable.Data, 'Funded Positions');
-            end
-            if app.uiValid(app.CombFXTable) && ~isempty(app.CombFXTable.Data)
-                L{end+1} = tableToLaTeX(app, app.CombFXTable.Data, 'Overlay Positions');
+            pctOpts = struct('numFmt','%.2f');
+            combTables = {app.CombinedTable, 'Funded Positions'; app.CombFXTable, 'Overlay Positions'};
+            for ct = 1:size(combTables,1)
+                tbl = combTables{ct,1}; cap = combTables{ct,2};
+                if app.uiValid(tbl) && ~isempty(tbl.Data)
+                    Tc = tbl.Data;
+                    if ismember('Weight', Tc.Properties.VariableNames)
+                        Tc.Weight = Tc.Weight * 100;
+                        Tc.Properties.VariableNames{strcmp(Tc.Properties.VariableNames,'Weight')} = 'Weight_pct';
+                    end
+                    if ismember('RiskContribution', Tc.Properties.VariableNames)
+                        Tc.RiskContribution = Tc.RiskContribution * 100;
+                        Tc.Properties.VariableNames{strcmp(Tc.Properties.VariableNames,'RiskContribution')} = 'RiskContr_pct';
+                    end
+                    L{end+1} = tableToLaTeX(app, Tc, cap, pctOpts); %#ok<AGROW>
+                end
             end
             % Tracking error
             if app.uiValid(app.TETable) && ~isempty(app.TETable.Data)
@@ -4423,7 +4497,8 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             % === Section 4: Risk Decomposition ===
             L{end+1} = '\section{Risk Decomposition}';
             if app.uiValid(app.RiskBudgetTable) && ~isempty(app.RiskBudgetTable.Data)
-                L{end+1} = tableToLaTeX(app, app.RiskBudgetTable.Data, 'Risk Budget');
+                riskOpts = struct('fontSize','scriptsize','numFmt','%.1f','landscape',true);
+                L{end+1} = tableToLaTeX(app, app.RiskBudgetTable.Data, 'Risk Budget', riskOpts);
             end
             if app.uiValid(app.ConcentrationText) && ~isempty(app.ConcentrationText.Value)
                 L{end+1} = '\subsection*{Concentration Metrics}';
