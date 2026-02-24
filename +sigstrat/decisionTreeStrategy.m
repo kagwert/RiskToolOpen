@@ -17,6 +17,8 @@ function result = decisionTreeStrategy(signals, signalNames, mkt, macro, opts)
 %     .txCost       - transaction cost (default 0.0010)
 %     .inSamplePct  - fraction for in-sample (default 0.70)
 %     .macroVars    - cell of macro variable names to include as features (default {})
+%     .useRegression - true/false, use regression tree for continuous [0,1] (default true)
+%     .nFolds       - number of expanding-window CV folds (default 3)
 %
 % Returns:
 %   result.eqWts        - Tx1 equity weights
@@ -24,6 +26,7 @@ function result = decisionTreeStrategy(signals, signalNames, mkt, macro, opts)
 %   result.rulesText    - human-readable rule description
 %   result.importance   - variable importance (auto mode)
 %   result.featureNames - feature names used
+%   result.cvMetrics    - per-fold OOS metrics (auto mode with CV)
 
     if nargin < 4, macro = []; end
     if nargin < 5, opts = struct(); end
@@ -50,7 +53,7 @@ function result = decisionTreeStrategy(signals, signalNames, mkt, macro, opts)
 end
 
 %% ==================== RULE-BASED MODE ====================
-function result = runRuleBased(signals, signalNames, mkt, macro, opts, T, ~) %#ok<INUSL>
+function result = runRuleBased(signals, signalNames, mkt, macro, opts, T, ~)
     rules   = getOpt(opts, 'rules', defaultRules(signalNames));
     ruleAgg = getOpt(opts, 'ruleAgg', 'FirstMatch');
 
@@ -128,15 +131,17 @@ function result = runRuleBased(signals, signalNames, mkt, macro, opts, T, ~) %#o
 end
 
 %% ==================== AUTO-OPTIMIZE MODE ====================
-function result = runAutoOptimize(signals, signalNames, mkt, macro, opts, T, N, rebalFreq, inPct) %#ok<INUSL>
-    maxDepth   = getOpt(opts, 'maxDepth', 3);
-    minLeaf    = getOpt(opts, 'minLeafSize', 50);
+function result = runAutoOptimize(signals, signalNames, mkt, macro, opts, T, ~, rebalFreq, inPct)
+    maxDepth      = getOpt(opts, 'maxDepth', 3);
+    minLeaf       = getOpt(opts, 'minLeafSize', 50);
+    useRegression = getOpt(opts, 'useRegression', true);
+    nFolds        = getOpt(opts, 'nFolds', 3);
 
     % Build feature matrix
     [featureMatrix, featureNames] = buildFeatures(signals, signalNames, macro, mkt);
     nFeatures = numel(featureNames);
 
-    % Target: did equity outperform cash over next rebalFreq days?
+    % Construct targets
     spxRet  = mkt.spxRet;
     cashRet = mkt.cashRet;
     fwdEqRet   = NaN(T, 1);
@@ -145,15 +150,94 @@ function result = runAutoOptimize(signals, signalNames, mkt, macro, opts, T, N, 
         fwdEqRet(t)   = prod(1 + spxRet(t+1:t+rebalFreq)) - 1;
         fwdCashRet(t) = prod(1 + cashRet(t+1:t+rebalFreq)) - 1;
     end
-    target = double(fwdEqRet > fwdCashRet);  % binary
+
+    if useRegression
+        % Regression target: excess return (continuous)
+        excessRet = fwdEqRet - fwdCashRet;
+    end
+    targetBinary = double(fwdEqRet > fwdCashRet);  % binary fallback
 
     % Walk-forward: train on first inPct, predict on rest
     splitIdx = round(T * inPct);
     eqWts = NaN(T, 1);
-    eqWts(1:splitIdx) = 0.5;  % no prediction for in-sample
+    eqWts(1:splitIdx) = 0.5;
 
-    % Identify valid training rows
-    validTrain = isfinite(target(1:splitIdx)) & all(isfinite(featureMatrix(1:splitIdx, :)), 2);
+    %% K-fold expanding-window CV for hyperparameter selection
+    depthCands = max(1, maxDepth-1):min(8, maxDepth+2);
+    leafCands  = [max(10, minLeaf-20), minLeaf, minLeaf+30];
+
+    bestCVObj = -Inf;
+    bestDepth = maxDepth;
+    bestLeaf  = minLeaf;
+
+    for di = 1:numel(depthCands)
+        for li = 1:numel(leafCands)
+            foldObj = zeros(nFolds, 1);
+            for fold = 1:nFolds
+                foldTrainEnd = round(splitIdx * fold / (nFolds + 1));
+                foldTestStart = foldTrainEnd + 1;
+                foldTestEnd = round(splitIdx * (fold + 1) / (nFolds + 1));
+                if foldTestEnd > splitIdx, foldTestEnd = splitIdx; end
+                if foldTestStart >= foldTestEnd, continue; end
+
+                if useRegression
+                    target_cv = excessRet;
+                else
+                    target_cv = targetBinary;
+                end
+                validTr = isfinite(target_cv(1:foldTrainEnd)) & ...
+                    all(isfinite(featureMatrix(1:foldTrainEnd, :)), 2);
+                if sum(validTr) < 50, continue; end
+
+                X_tr = featureMatrix(validTr, :);
+                Y_tr = target_cv(validTr);
+                ms = 2^depthCands(di) - 1;
+
+                if useRegression
+                    mdl = fitrtree(X_tr, Y_tr, 'MaxNumSplits', ms, ...
+                        'MinLeafSize', leafCands(li), 'PredictorNames', featureNames);
+                    predRaw = predict(mdl, featureMatrix(foldTestStart:foldTestEnd, :));
+                    % Map predictions to [0,1] via sigmoid
+                    predWt = 1 ./ (1 + exp(-10 * predRaw));
+                else
+                    mdl = fitctree(X_tr, Y_tr, 'MaxNumSplits', ms, ...
+                        'MinLeafSize', leafCands(li), 'PredictorNames', featureNames);
+                    [~, scores] = predict(mdl, featureMatrix(foldTestStart:foldTestEnd, :));
+                    if size(scores, 2) >= 2
+                        predWt = scores(:, 2);
+                    else
+                        predWt = 0.5 * ones(foldTestEnd - foldTestStart + 1, 1);
+                    end
+                end
+
+                predWt = max(0, min(1, predWt));
+                mktFold = subsetMkt(mkt, foldTestStart, foldTestEnd);
+                bt = sigstrat.backtestEquityCash(predWt, mktFold, rebalFreq, 0.001);
+                r = bt.portRet;
+                if numel(r) < 10, continue; end
+                annRet = (prod(1 + r))^(252 / numel(r)) - 1;
+                annVol = std(r) * sqrt(252);
+                foldObj(fold) = annRet / max(1e-12, annVol);
+            end
+
+            avgObj = mean(foldObj);
+            if avgObj > bestCVObj
+                bestCVObj = avgObj;
+                bestDepth = depthCands(di);
+                bestLeaf  = leafCands(li);
+            end
+        end
+    end
+
+    fprintf('CV selected: depth=%d, minLeaf=%d (avg Sharpe=%.2f)\n', bestDepth, bestLeaf, bestCVObj);
+
+    %% Fit final model with best hyperparameters
+    if useRegression
+        targetFinal = excessRet;
+    else
+        targetFinal = targetBinary;
+    end
+    validTrain = isfinite(targetFinal(1:splitIdx)) & all(isfinite(featureMatrix(1:splitIdx, :)), 2);
 
     if sum(validTrain) < 100
         warning('sigstrat:decisionTreeStrategy', 'Insufficient valid training data (%d rows).', sum(validTrain));
@@ -161,41 +245,55 @@ function result = runAutoOptimize(signals, signalNames, mkt, macro, opts, T, N, 
         result.rulesText = 'Insufficient training data';
         result.importance = zeros(1, nFeatures);
         result.featureNames = featureNames;
+        result.cvMetrics = struct();
         return;
     end
 
     X_train = featureMatrix(validTrain, :);
-    Y_train = target(validTrain);
+    Y_train = targetFinal(validTrain);
+    maxSplits = 2^bestDepth - 1;
 
-    % Fit classification tree
-    maxSplits = 2^maxDepth - 1;
-    treeModel = fitctree(X_train, Y_train, ...
-        'MaxNumSplits', maxSplits, ...
-        'MinLeafSize', minLeaf, ...
-        'PredictorNames', featureNames);
+    if useRegression
+        treeModel = fitrtree(X_train, Y_train, ...
+            'MaxNumSplits', maxSplits, ...
+            'MinLeafSize', bestLeaf, ...
+            'PredictorNames', featureNames);
 
-    % Predict on out-of-sample
-    for t = splitIdx+1:T
-        row = featureMatrix(t, :);
-        if any(~isfinite(row))
-            eqWts(t) = 0.5;
-            continue;
+        % Predict on out-of-sample
+        for t = splitIdx+1:T
+            row = featureMatrix(t, :);
+            if any(~isfinite(row))
+                eqWts(t) = 0.5;
+                continue;
+            end
+            predRaw = predict(treeModel, row);
+            eqWts(t) = 1 / (1 + exp(-10 * predRaw));
         end
-        [~, scores] = predict(treeModel, row);
-        if size(scores, 2) >= 2
-            eqWts(t) = scores(:, 2);  % probability of class 1 (equity outperforms)
-        else
-            eqWts(t) = 0.5;
+    else
+        treeModel = fitctree(X_train, Y_train, ...
+            'MaxNumSplits', maxSplits, ...
+            'MinLeafSize', bestLeaf, ...
+            'PredictorNames', featureNames);
+
+        for t = splitIdx+1:T
+            row = featureMatrix(t, :);
+            if any(~isfinite(row))
+                eqWts(t) = 0.5;
+                continue;
+            end
+            [~, scores] = predict(treeModel, row);
+            if size(scores, 2) >= 2
+                eqWts(t) = scores(:, 2);
+            else
+                eqWts(t) = 0.5;
+            end
         end
     end
 
     eqWts = max(0, min(1, eqWts));
     eqWts(isnan(eqWts)) = 0.5;
 
-    % Extract rules text
     rulesText = extractTreeRules(treeModel);
-
-    % Variable importance
     importance = predictorImportance(treeModel);
 
     result.eqWts        = eqWts;
@@ -204,6 +302,8 @@ function result = runAutoOptimize(signals, signalNames, mkt, macro, opts, T, N, 
     result.featureNames = featureNames;
     result.treeModel    = treeModel;
     result.splitIdx     = splitIdx;
+    result.cvMetrics    = struct('bestDepth', bestDepth, 'bestLeaf', bestLeaf, ...
+        'avgCVSharpe', bestCVObj, 'useRegression', useRegression, 'nFolds', nFolds);
 end
 
 %% ---- Build feature matrix ----
@@ -316,6 +416,15 @@ function vals = forwardFill(srcDates, srcVals, targetDates)
         end
         vals(i) = lastVal;
     end
+end
+
+%% ---- Subset market data ----
+function mktSub = subsetMkt(mkt, i1, i2)
+    mktSub.retDates = mkt.retDates(i1:i2);
+    mktSub.spxRet   = mkt.spxRet(i1:i2);
+    mktSub.cashRet  = mkt.cashRet(i1:i2);
+    mktSub.spxPrice = mkt.spxPrice(i1:min(i2+1, numel(mkt.spxPrice)));
+    mktSub.dates    = mkt.dates(i1:min(i2+1, numel(mkt.dates)));
 end
 
 %% ---- Get option with default ----

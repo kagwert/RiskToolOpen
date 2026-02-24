@@ -9,9 +9,12 @@ function result = riskBudgetStrategy(signals, signalNames, mkt, macro, opts) %#o
 %   macro       - table from sigstrat.downloadMacroData (or [])
 %   opts        - struct with fields:
 %     .budgets       - 1xN budget allocation per signal (default equal, sum=1)
-%     .translations  - 1xN cell of translation types: 'Linear','Threshold','Sigmoid','Quantile'
+%     .translations  - 1xN cell of translation types:
+%                      'Linear','Threshold','Sigmoid','Quantile','PiecewiseLinear','Spline','Power'
 %     .thresholds    - 1xN thresholds for Threshold translation (default 0)
 %     .sigmoidK      - sigmoid steepness (default 3)
+%     .breakpoints   - Mx2 breakpoints for PiecewiseLinear/Spline (default 5-point)
+%     .powerExp      - exponent for Power translation (default 1)
 %     .macroCond     - true/false, apply macro conditioning (default false)
 %     .macroVar      - macro variable name for conditioning (default 'YieldSlope')
 %     .macroThresh   - threshold for macro conditioning (default 0)
@@ -44,6 +47,8 @@ function result = riskBudgetStrategy(signals, signalNames, mkt, macro, opts) %#o
 
     thresholds = getOpt(opts, 'thresholds', zeros(1, N));
     sigmoidK   = getOpt(opts, 'sigmoidK', 3);
+    breakpoints = getOpt(opts, 'breakpoints', []);
+    powerExp   = getOpt(opts, 'powerExp', 1);
     macroCond  = getOpt(opts, 'macroCond', false);
     macroVar   = getOpt(opts, 'macroVar', 'YieldSlope');
     macroThresh = getOpt(opts, 'macroThresh', 0);
@@ -83,6 +88,23 @@ function result = riskBudgetStrategy(signals, signalNames, mkt, macro, opts) %#o
                     pctRank = mean(history <= sig(t));
                     allocations(t, j) = b * pctRank;
                 end
+
+            case 'PiecewiseLinear'
+                % Monotone piecewise linear via mapSignalToWeight
+                params = struct();
+                if ~isempty(breakpoints), params.breakpoints = breakpoints; end
+                allocations(:, j) = b * sigstrat.mapSignalToWeight(sig, 'PiecewiseLinear', params);
+
+            case 'Spline'
+                % Monotone cubic spline via mapSignalToWeight
+                params = struct();
+                if ~isempty(breakpoints), params.breakpoints = breakpoints; end
+                allocations(:, j) = b * sigstrat.mapSignalToWeight(sig, 'Spline', params);
+
+            case 'Power'
+                % Power mapping via mapSignalToWeight
+                params = struct('p', powerExp);
+                allocations(:, j) = b * sigstrat.mapSignalToWeight(sig, 'Power', params);
 
             otherwise
                 % Default to linear

@@ -105,15 +105,18 @@ end
 %% ==================== MOMENTUM SIGNAL ====================
 function sig = momentumSignal(ret, lookback, minHistory)
 %MOMENTUMSIGNAL Cumulative return over lookback, z-scored with expanding window.
-%   Positive momentum → positive signal (bullish equity).
+%   Positive momentum -> positive signal (bullish equity).
+%   Uses EWMA vol (halflife=32) instead of equal-weight std for smoother estimates.
     T = numel(ret);
     sig = NaN(T, 1);
+
+    % Precompute EWMA vol series
+    volSeries = ewmaVolLocal(ret, 32);
 
     % Pre-compute cumulative returns for each valid time
     for t = lookback:T
         cumRet = sum(ret(t-lookback+1:t));
-        volEst = std(ret(max(1,t-lookback+1):t));
-        volEst = max(volEst, 1e-8);
+        volEst = max(volSeries(t), 1e-8);
         momRaw = cumRet / (volEst * sqrt(lookback));
 
         if t >= minHistory
@@ -121,7 +124,7 @@ function sig = momentumSignal(ret, lookback, minHistory)
             momHist = NaN(t - lookback + 1, 1);
             for s = lookback:t
                 cr = sum(ret(s-lookback+1:s));
-                v = max(std(ret(max(1,s-lookback+1):s)), 1e-8);
+                v = max(volSeries(s), 1e-8);
                 momHist(s - lookback + 1) = cr / (v * sqrt(lookback));
             end
             momHist = momHist(isfinite(momHist));
@@ -300,4 +303,17 @@ function z = robustZScore(val, series)
     mad_val = median(abs(series - med), 'omitnan');
     scale = 1.4826 * max(mad_val, 1e-8);
     z = (val - med) / scale;
+end
+
+function vol = ewmaVolLocal(ret, halflife)
+%EWMAVOLLOCAL Compute EWMA volatility series.
+    T = numel(ret);
+    lambda = exp(-log(2) / halflife);
+    vol = NaN(T, 1);
+    ewmaVar = ret(1)^2;
+    vol(1) = sqrt(ewmaVar);
+    for t = 2:T
+        ewmaVar = lambda * ewmaVar + (1 - lambda) * ret(t)^2;
+        vol(t) = sqrt(ewmaVar);
+    end
 end
