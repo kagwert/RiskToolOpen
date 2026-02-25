@@ -21,6 +21,11 @@ function result = robustOptimize(signals, signalNames, mkt, opts)
 %     .walkForward  - true/false, use rolling walk-forward (default false)
 %     .reoptFreq    - re-optimization frequency in days (default 252)
 %     .sensitivity  - true/false, run bootstrap sensitivity (default false)
+%     .useSortino   - use Sortino ratio objective (default false)
+%     .useCalmar    - use Calmar ratio objective (default false)
+%     .minVol       - minimize annualized vol (default false)
+%     .riskParity   - risk parity objective (default false)
+%     .constraints  - struct with constraint fields (optional)
 %
 % Returns:
 %   result.weights      - Nx1 optimal signal weights
@@ -52,16 +57,25 @@ function result = robustOptimize(signals, signalNames, mkt, opts)
     doWalkFwd    = getOpt(opts, 'walkForward', false);
     reoptFreq    = getOpt(opts, 'reoptFreq', 252);
     doSensitivity = getOpt(opts, 'sensitivity', false);
+    useSortino   = getOpt(opts, 'useSortino', false);
+    useCalmar    = getOpt(opts, 'useCalmar', false);
+    minVolFlag   = getOpt(opts, 'minVol', false);
+    riskParityFlag = getOpt(opts, 'riskParity', false);
+    constraints  = getOpt(opts, 'constraints', struct());
 
     [T, N] = size(signals);
 
     mappingParams = buildMappingParams(mappingMethod, sigmoidK, nThresh);
 
+    % Build objective flags struct
+    objFlags = struct('useSortino', useSortino, 'useCalmar', useCalmar, ...
+        'minVol', minVolFlag, 'riskParity', riskParityFlag);
+
     %% Walk-forward rolling mode
     if doWalkFwd
         result = runWalkForward(signals, signalNames, mkt, T, N, ...
             reoptFreq, rebalFreq, txCost, alphaObj, betaObj, gammaObj, ...
-            lambda, kappa, mappingMethod, mappingParams);
+            lambda, kappa, mappingMethod, mappingParams, objFlags, constraints);
         result.mappingMethod = mappingMethod;
         result.regularization = struct('lambda', lambda, 'kappa', kappa);
         result.signalNames = signalNames;
@@ -71,7 +85,20 @@ function result = robustOptimize(signals, signalNames, mkt, opts)
     %% K-fold expanding-window cross-validation
     fprintf('Robust optimization: %d-fold CV, %d signals, mapping=%s...\n', nFolds, N, mappingMethod);
 
+    % Apply signal weight bounds from constraints
+    sigWtMin = 0;
+    sigWtMax = 1;
+    if isfield(constraints, 'sigWtMin'), sigWtMin = constraints.sigWtMin; end
+    if isfield(constraints, 'sigWtMax'), sigWtMax = constraints.sigWtMax; end
     wCandidates = generateWeightGrid(N, 0.10);
+    % Filter candidates by signal weight bounds
+    if sigWtMin > 0 || sigWtMax < 1
+        keepMask = all(wCandidates >= sigWtMin - 1e-9, 2) & all(wCandidates <= sigWtMax + 1e-9, 2);
+        wCandidates = wCandidates(keepMask, :);
+        if isempty(wCandidates)
+            wCandidates = ones(1, N) / N;
+        end
+    end
     nW = size(wCandidates, 1);
 
     cvFolds = struct('foldIdx', {}, 'trainEnd', {}, 'testStart', {}, 'testEnd', {}, ...
@@ -91,12 +118,14 @@ function result = robustOptimize(signals, signalNames, mkt, opts)
             compTest  = signals(testStart:testEnd, :) * w';
 
             eqWtTest = sigstrat.mapSignalToWeight(compTest, mappingMethod, mappingParams);
+            % Apply equity weight constraints
+            eqWtTest = applyEqConstraints(eqWtTest, constraints);
 
             mktTest = subsetMkt(mkt, testStart, testEnd);
             bt = sigstrat.backtestEquityCash(eqWtTest, mktTest, rebalFreq, txCost);
 
             obj = computeRegularizedObj(bt.portRet, w, eqWtTest, N, ...
-                alphaObj, betaObj, gammaObj, lambda, kappa);
+                alphaObj, betaObj, gammaObj, lambda, kappa, objFlags, constraints);
             foldObjByW(wi, fold) = obj;
         end
 
@@ -130,6 +159,7 @@ function result = robustOptimize(signals, signalNames, mkt, opts)
     %% Apply best weights to full sample
     composite = signals * bestW';
     eqWts = sigstrat.mapSignalToWeight(composite, mappingMethod, mappingParams);
+    eqWts = applyEqConstraints(eqWts, constraints);
 
     % Use last fold boundary as IS/OOS split for reporting
     splitIdx = cvFolds(end).trainEnd;
@@ -186,7 +216,9 @@ end
 %% ==================== WALK-FORWARD ROLLING ====================
 function result = runWalkForward(signals, ~, mkt, T, N, ...
         reoptFreq, rebalFreq, txCost, alphaObj, betaObj, gammaObj, ...
-        lambda, kappa, mappingMethod, mappingParams)
+        lambda, kappa, mappingMethod, mappingParams, objFlags, constraints)
+    if nargin < 17, objFlags = struct(); end
+    if nargin < 18, constraints = struct(); end
 
     fprintf('Walk-forward optimization: reopt every %d days, %d signals...\n', reoptFreq, N);
 
@@ -208,11 +240,12 @@ function result = runWalkForward(signals, ~, mkt, T, N, ...
             w = wCandidates(wi, :);
             comp = signals(1:trainEnd, :) * w';
             eqWt = sigstrat.mapSignalToWeight(comp, mappingMethod, mappingParams);
+            eqWt = applyEqConstraints(eqWt, constraints);
 
             mktTrain = subsetMkt(mkt, 1, trainEnd);
             bt = sigstrat.backtestEquityCash(eqWt, mktTrain, rebalFreq, txCost);
             obj = computeRegularizedObj(bt.portRet, w, eqWt, N, ...
-                alphaObj, betaObj, gammaObj, lambda, kappa);
+                alphaObj, betaObj, gammaObj, lambda, kappa, objFlags, constraints);
 
             if obj > bestObj
                 bestObj = obj;
@@ -225,7 +258,8 @@ function result = runWalkForward(signals, ~, mkt, T, N, ...
         segEnd = testEnd;
         if segStart <= T && segStart <= segEnd
             comp = signals(segStart:segEnd, :) * currentW';
-            eqWts(segStart:segEnd) = sigstrat.mapSignalToWeight(comp, mappingMethod, mappingParams);
+            segEq = sigstrat.mapSignalToWeight(comp, mappingMethod, mappingParams);
+            eqWts(segStart:segEnd) = applyEqConstraints(segEq, constraints);
         end
     end
 
@@ -309,7 +343,10 @@ end
 
 %% ==================== HELPER FUNCTIONS ====================
 
-function obj = computeRegularizedObj(portRet, w, eqWt, N, alpha, beta, gamma, lambda, kappa)
+function obj = computeRegularizedObj(portRet, w, eqWt, N, alpha, beta, gamma, lambda, kappa, objFlags, constraints)
+    if nargin < 10, objFlags = struct(); end
+    if nargin < 11, constraints = struct(); end
+
     r = portRet;
     M = numel(r);
     k = 252;
@@ -330,6 +367,53 @@ function obj = computeRegularizedObj(portRet, w, eqWt, N, alpha, beta, gamma, la
 
     obj = alpha * sharpe + beta * annRet - gamma * maxDD ...
         - lambda * weightPenalty - kappa * turnover;
+
+    % Extended objectives
+    if isfield(objFlags, 'useSortino') && objFlags.useSortino
+        downRet = r(r < 0);
+        if numel(downRet) > 5
+            downVol = std(downRet) * sqrt(k);
+            sortino = annRet / max(1e-12, downVol);
+            obj = obj + sortino;
+        end
+    end
+
+    if isfield(objFlags, 'useCalmar') && objFlags.useCalmar
+        calmar = annRet / max(1e-8, maxDD);
+        obj = obj + calmar;
+    end
+
+    if isfield(objFlags, 'minVol') && objFlags.minVol
+        obj = obj - annVol;
+    end
+
+    if isfield(objFlags, 'riskParity') && objFlags.riskParity && N > 1
+        % Minimize variance of risk contributions
+        wVec = w(:)';
+        sigmaW = wVec .* annVol;
+        riskContrib = sigmaW / max(sum(sigmaW), 1e-8);
+        rpPenalty = var(riskContrib);
+        obj = obj - 10 * rpPenalty;
+    end
+
+    % Constraint penalties
+    if isfield(constraints, 'maxTurnover')
+        annTurnover = sum(abs(diff(eqWt))) * k / M;
+        excess = max(0, annTurnover - constraints.maxTurnover);
+        obj = obj - 5 * excess;
+    end
+
+    if isfield(constraints, 'maxDD')
+        priority = '';
+        if isfield(constraints, 'priority'), priority = constraints.priority; end
+        if maxDD > constraints.maxDD
+            if strcmp(priority, 'Drawdown')
+                obj = -Inf;  % hard constraint
+            else
+                obj = obj - 10 * (maxDD - constraints.maxDD);
+            end
+        end
+    end
 end
 
 function metrics = quickMetrics(portRet)
@@ -396,6 +480,16 @@ function mktSub = subsetMkt(mkt, i1, i2)
     mktSub.cashRet  = mkt.cashRet(i1:i2);
     mktSub.spxPrice = mkt.spxPrice(i1:min(i2+1, numel(mkt.spxPrice)));
     mktSub.dates    = mkt.dates(i1:min(i2+1, numel(mkt.dates)));
+end
+
+function eqWts = applyEqConstraints(eqWts, constraints)
+%APPLYEQCONSTRAINTS Clamp equity weights by eqMin/eqMax constraints.
+    if isfield(constraints, 'eqMin')
+        eqWts = max(constraints.eqMin, eqWts);
+    end
+    if isfield(constraints, 'eqMax')
+        eqWts = min(constraints.eqMax, eqWts);
+    end
 end
 
 function v = getOpt(opts, name, default)

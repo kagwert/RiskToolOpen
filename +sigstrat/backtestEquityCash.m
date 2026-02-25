@@ -1,12 +1,16 @@
-function bt = backtestEquityCash(eqWts, mkt, rebalFreq, txCost)
+function bt = backtestEquityCash(eqWts, mkt, rebalFreq, txCost, constraints)
 %SIGSTRAT.BACKTESTEQUITYCASH Walk-forward equity/cash backtest.
-%   bt = sigstrat.backtestEquityCash(eqWts, mkt, rebalFreq, txCost)
+%   bt = sigstrat.backtestEquityCash(eqWts, mkt, rebalFreq, txCost, constraints)
 %
 % Inputs:
-%   eqWts     - Tx1 target equity weight (0 to 1), aligned to mkt.retDates
-%   mkt       - struct from sigstrat.downloadMarketData
-%   rebalFreq - rebalance frequency in days (default 21)
-%   txCost    - transaction cost per unit turnover (default 0.0010 = 10 bps)
+%   eqWts       - Tx1 target equity weight (0 to 1), aligned to mkt.retDates
+%   mkt         - struct from sigstrat.downloadMarketData
+%   rebalFreq   - rebalance frequency in days (default 21)
+%   txCost      - transaction cost per unit turnover (default 0.0010 = 10 bps)
+%   constraints - (optional) struct with fields:
+%     .eqMin    - minimum equity weight
+%     .eqMax    - maximum equity weight
+%     .maxDD    - drawdown stop-loss threshold (e.g. 0.20 = 20%)
 %
 % Returns:
 %   bt.portRet   - Tx1 daily portfolio returns
@@ -21,6 +25,16 @@ function bt = backtestEquityCash(eqWts, mkt, rebalFreq, txCost)
 
     if nargin < 3 || isempty(rebalFreq), rebalFreq = 21; end
     if nargin < 4 || isempty(txCost),    txCost = 0.0010; end
+    if nargin < 5, constraints = struct(); end
+
+    % Extract constraint values
+    eqMinC = 0;
+    eqMaxC = 1;
+    ddStop = Inf;
+    if isfield(constraints, 'eqMin'), eqMinC = constraints.eqMin; end
+    if isfield(constraints, 'eqMax'), eqMaxC = constraints.eqMax; end
+    if isfield(constraints, 'maxDD'), ddStop = constraints.maxDD; end
+    hasDD = isfinite(ddStop);
 
     spxRet  = mkt.spxRet;
     cashRet = mkt.cashRet;
@@ -36,12 +50,22 @@ function bt = backtestEquityCash(eqWts, mkt, rebalFreq, txCost)
     turnover  = zeros(T, 1);
 
     % Initialize: use first signal weight
-    w_eq = max(0, min(1, eqWts(1)));
+    w_eq = max(eqMinC, min(eqMaxC, eqWts(1)));
     daysSinceRebal = 0;
+    runningMax = 1;
+    cumWealth = 1;
+    ddStopped = false;
 
     for t = 1:T
         % Portfolio return using prior weight
         portRet(t) = w_eq * spxRet(t) + (1 - w_eq) * cashRet(t);
+
+        % Track cumulative wealth for DD stop-loss
+        cumWealth = cumWealth * (1 + portRet(t));
+        if cumWealth > runningMax
+            runningMax = cumWealth;
+        end
+        currentDD = 1 - cumWealth / runningMax;
 
         % Drift: update weight after return
         if abs(w_eq * (1 + spxRet(t)) + (1 - w_eq) * (1 + cashRet(t))) > 1e-12
@@ -52,8 +76,20 @@ function bt = backtestEquityCash(eqWts, mkt, rebalFreq, txCost)
 
         daysSinceRebal = daysSinceRebal + 1;
 
+        % Drawdown stop-loss check
+        if hasDD
+            if currentDD >= ddStop
+                ddStopped = true;
+            elseif ddStopped && currentDD < ddStop * 0.5
+                ddStopped = false;  % recover when DD drops to 50% of threshold
+            end
+        end
+
         % Rebalance check
-        targetW = max(0, min(1, eqWts(t)));
+        targetW = max(eqMinC, min(eqMaxC, eqWts(t)));
+        if ddStopped
+            targetW = eqMinC;  % force minimum allocation during DD stop
+        end
         if daysSinceRebal >= rebalFreq || t == 1
             dW = abs(targetW - w_eq_drifted);
             turnover(t) = dW;

@@ -34,6 +34,13 @@ function result = optimizeComposite(signals, signalNames, mkt, opts)
     rebalFreq  = getOpt(opts, 'rebalFreq', 21);
     txCost     = getOpt(opts, 'txCost', 0.0010);
     inPct      = getOpt(opts, 'inSamplePct', 0.70);
+    constraints = getOpt(opts, 'constraints', struct());
+    useSortino   = getOpt(opts, 'useSortino', false);
+    useCalmar    = getOpt(opts, 'useCalmar', false);
+    minVolFlag   = getOpt(opts, 'minVol', false);
+    riskParityFlag = getOpt(opts, 'riskParity', false);
+    objFlags = struct('useSortino', useSortino, 'useCalmar', useCalmar, ...
+        'minVol', minVolFlag, 'riskParity', riskParityFlag);
 
     [T, N] = size(signals);
     K = nThresh;
@@ -46,6 +53,17 @@ function result = optimizeComposite(signals, signalNames, mkt, opts)
 
     % Generate weight combinations (10% steps, sum=1, w>=0)
     wCandidates = generateWeightGrid(N, 0.10);
+    % Apply signal weight bounds from constraints
+    if isfield(constraints, 'sigWtMin') || isfield(constraints, 'sigWtMax')
+        swMin = 0; swMax = 1;
+        if isfield(constraints, 'sigWtMin'), swMin = constraints.sigWtMin; end
+        if isfield(constraints, 'sigWtMax'), swMax = constraints.sigWtMax; end
+        keepMask = all(wCandidates >= swMin - 1e-9, 2) & all(wCandidates <= swMax + 1e-9, 2);
+        wCandidates = wCandidates(keepMask, :);
+        if isempty(wCandidates)
+            wCandidates = ones(1, N) / N;
+        end
+    end
     nW = size(wCandidates, 1);
 
     bestObj = -Inf;
@@ -77,13 +95,15 @@ function result = optimizeComposite(signals, signalNames, mkt, opts)
             % Map composite to equity weights (in-sample only)
             eqWtsIn = mapCompositeToEqWt(compIn, threshCands, eqLevels);
             if all(isnan(eqWtsIn)), continue; end
+            % Apply equity constraints
+            eqWtsIn = applyEqConstraints(eqWtsIn, constraints);
 
             % Quick backtest on in-sample
             mktIn = subsetMkt(mkt, 1, splitIdx);
             btIn = sigstrat.backtestEquityCash(eqWtsIn, mktIn, rebalFreq, txCost);
 
             % Objective
-            obj = computeObj(btIn.portRet, alphaObj, betaObj, gammaObj);
+            obj = computeObj(btIn.portRet, alphaObj, betaObj, gammaObj, objFlags, constraints);
             if obj > bestObj
                 bestObj = obj;
                 bestW = w;
@@ -104,7 +124,7 @@ function result = optimizeComposite(signals, signalNames, mkt, opts)
         Aeq(1:N) = 1;
         beq = 1;
 
-        objFcn = @(x) -evalCompositeObj(x, N, K, signals(1:splitIdx,:), mkt, splitIdx, rebalFreq, txCost, alphaObj, betaObj, gammaObj);
+        objFcn = @(x) -evalCompositeObj(x, N, K, signals(1:splitIdx,:), mkt, splitIdx, rebalFreq, txCost, alphaObj, betaObj, gammaObj, objFlags, constraints);
 
         fminconOpts = optimoptions('fmincon', 'Display', 'off', 'Algorithm', 'sqp', ...
             'MaxIterations', 200, 'MaxFunctionEvaluations', 5000);
@@ -124,6 +144,7 @@ function result = optimizeComposite(signals, signalNames, mkt, opts)
     %% Apply best parameters to full sample
     composite = signals * bestW';
     eqWts = mapCompositeToEqWt(composite, bestThresh, bestEqLevels);
+    eqWts = applyEqConstraints(eqWts, constraints);
 
     % In-sample performance
     mktIn = subsetMkt(mkt, 1, splitIdx);
@@ -186,7 +207,9 @@ function eqWt = mapCompositeToEqWt(comp, thresholds, eqLevels)
 end
 
 %% ---- Compute objective ----
-function obj = computeObj(portRet, alpha, beta, gamma)
+function obj = computeObj(portRet, alpha, beta, gamma, objFlags, constraints)
+    if nargin < 5, objFlags = struct(); end
+    if nargin < 6, constraints = struct(); end
     r = portRet;
     M = numel(r);
     k = 252;
@@ -196,20 +219,50 @@ function obj = computeObj(portRet, alpha, beta, gamma)
     cumW = cumprod(1 + r);
     maxDD = abs(min(cumW ./ cummax(cumW) - 1));
     obj = alpha * sharpe + beta * annRet - gamma * maxDD;
+
+    % Extended objectives
+    if isfield(objFlags, 'useSortino') && objFlags.useSortino
+        downRet = r(r < 0);
+        if numel(downRet) > 5
+            sortino = annRet / max(1e-12, std(downRet) * sqrt(k));
+            obj = obj + sortino;
+        end
+    end
+    if isfield(objFlags, 'useCalmar') && objFlags.useCalmar
+        obj = obj + annRet / max(1e-8, maxDD);
+    end
+    if isfield(objFlags, 'minVol') && objFlags.minVol
+        obj = obj - annVol;
+    end
+    % Constraint penalties
+    if isfield(constraints, 'maxDD')
+        priority = '';
+        if isfield(constraints, 'priority'), priority = constraints.priority; end
+        if maxDD > constraints.maxDD
+            if strcmp(priority, 'Drawdown')
+                obj = -Inf;
+            else
+                obj = obj - 10 * (maxDD - constraints.maxDD);
+            end
+        end
+    end
 end
 
 %% ---- Evaluate composite objective (for fmincon) ----
-function obj = evalCompositeObj(x, N, K, signalsIn, mkt, splitIdx, rebalFreq, txCost, alpha, beta, gamma)
+function obj = evalCompositeObj(x, N, K, signalsIn, mkt, splitIdx, rebalFreq, txCost, alpha, beta, gamma, objFlags, constraints)
+    if nargin < 12, objFlags = struct(); end
+    if nargin < 13, constraints = struct(); end
     w = x(1:N)';
     thresh = sort(x(N+1:N+K));
     eqLevels = x(N+K+1:end);
 
     comp = signalsIn * w';
     eqWts = mapCompositeToEqWt(comp, thresh, eqLevels);
+    eqWts = applyEqConstraints(eqWts, constraints);
 
     mktIn = subsetMkt(mkt, 1, splitIdx);
     bt = sigstrat.backtestEquityCash(eqWts, mktIn, rebalFreq, txCost);
-    obj = computeObj(bt.portRet, alpha, beta, gamma);
+    obj = computeObj(bt.portRet, alpha, beta, gamma, objFlags, constraints);
 end
 
 %% ---- Threshold ordering nonlinear constraint ----
@@ -285,6 +338,16 @@ function mktSub = subsetMkt(mkt, i1, i2)
     mktSub.cashRet  = mkt.cashRet(i1:i2);
     mktSub.spxPrice = mkt.spxPrice(i1:min(i2+1, numel(mkt.spxPrice)));
     mktSub.dates    = mkt.dates(i1:min(i2+1, numel(mkt.dates)));
+end
+
+%% ---- Apply equity constraints ----
+function eqWts = applyEqConstraints(eqWts, constraints)
+    if isfield(constraints, 'eqMin')
+        eqWts = max(constraints.eqMin, eqWts);
+    end
+    if isfield(constraints, 'eqMax')
+        eqWts = min(constraints.eqMax, eqWts);
+    end
 end
 
 %% ---- Get option with default ----
