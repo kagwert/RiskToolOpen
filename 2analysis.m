@@ -6,35 +6,50 @@ clear; clc; close all;
 filename = 'Signals.xlsx';
 disp('Loading data from Excel...');
 
-% Read both tabs
+% 1. Detect import options
 opts_signals = detectImportOptions(filename, 'Sheet', 'Signals');
 opts_markets = detectImportOptions(filename, 'Sheet', 'Markets');
+
+% 2. CRITICAL FIX: Tell MATLAB to treat Bloomberg '#N/A N/A' as missing (NaN)
+% This ensures your index columns import as numbers (doubles), not text strings.
+missing_strings = {'#N/A N/A', '#N/A', 'N/A', ''};
+opts_signals.TreatAsMissing = missing_strings;
+opts_markets.TreatAsMissing = missing_strings;
+
+% 3. Read both tabs
 signals_data = readtimetable(filename, opts_signals);
 markets_data = readtimetable(filename, opts_markets);
 
-% Synchronize data (intersection prevents weekend/holiday mismatches)
+% 4. Synchronize data
 data = synchronize(markets_data, signals_data, 'intersection');
-data.dates = data.Time; 
+
+% 5. CRITICAL FIX: Use Properties.RowTimes instead of hardcoding 'Time' or 'Dates'
+data.dates = data.Properties.RowTimes; 
 
 % -------------------------------------------------------------------------
 % ACTION REQUIRED: Map your exact Excel column headers below
+% Example based on your screenshot: data.equity_index = data.SPXIndex;
 % -------------------------------------------------------------------------
 try
-    data.equity_index       = data.SPX_Index;           % Replace with your Equity column
+    data.equity_index       = data.SPXIndex;            % Updated based on your image
+    % Make sure to update the following three based on your Signals tab!
     data.overall_signal     = data.Overall_Signal;      % Replace with your Overall Signal column
     data.macro_signal       = data.Macro_Signal;        % Replace with your Macro Signal column
     data.vol_term_structure = data.VIX_VIX3M_Ratio;     % Replace with your Vol Ratio column
     
     % Calculate daily returns dynamically
     data.daily_returns = [0; diff(data.equity_index) ./ data.equity_index(1:end-1)];
-catch
-    error('Column mapping failed. Please update lines 21-24 with your exact Excel headers.');
+catch ME
+    disp(ME.message);
+    error('Column mapping failed. Please update lines 28-31 with your exact Excel headers.');
 end
 
 % Handle missing data (Forward fill to prevent look-ahead bias)
 if any(ismissing(data))
     data = fillmissing(data, 'previous');
 end
+
+disp('Step 1 Complete: Data loaded, cleaned, and synchronized.');
 
 %% STEP 2: Identify Subzero Regimes & Baseline Analysis
 % -------------------------------------------------------------------------
