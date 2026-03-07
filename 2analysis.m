@@ -10,11 +10,10 @@ disp('Loading data from Excel...');
 opts_signals = detectImportOptions(filename, 'Sheet', 'Signals');
 opts_markets = detectImportOptions(filename, 'Sheet', 'Markets');
 
-% 2. CRITICAL FIX: Tell MATLAB to treat Bloomberg '#N/A N/A' as missing (NaN)
-% This ensures your index columns import as numbers (doubles), not text strings.
-missing_strings = {'#N/A N/A', '#N/A', 'N/A', ''};
-opts_signals.TreatAsMissing = missing_strings;
-opts_markets.TreatAsMissing = missing_strings;
+% 2. CRITICAL FIX: Force all columns (except the first Date column) to be numeric
+% This automatically converts Bloomberg '#N/A N/A' strings into NaNs!
+opts_signals = setvartype(opts_signals, opts_signals.VariableNames(2:end), 'double');
+opts_markets = setvartype(opts_markets, opts_markets.VariableNames(2:end), 'double');
 
 % 3. Read both tabs
 signals_data = readtimetable(filename, opts_signals);
@@ -23,25 +22,25 @@ markets_data = readtimetable(filename, opts_markets);
 % 4. Synchronize data
 data = synchronize(markets_data, signals_data, 'intersection');
 
-% 5. CRITICAL FIX: Use Properties.RowTimes instead of hardcoding 'Time' or 'Dates'
+% 5. Define the date array
 data.dates = data.Properties.RowTimes; 
 
 % -------------------------------------------------------------------------
 % ACTION REQUIRED: Map your exact Excel column headers below
-% Example based on your screenshot: data.equity_index = data.SPXIndex;
 % -------------------------------------------------------------------------
 try
-    data.equity_index       = data.SPXIndex;            % Updated based on your image
-    % Make sure to update the following three based on your Signals tab!
-    data.overall_signal     = data.Overall_Signal;      % Replace with your Overall Signal column
-    data.macro_signal       = data.Macro_Signal;        % Replace with your Macro Signal column
-    data.vol_term_structure = data.VIX_VIX3M_Ratio;     % Replace with your Vol Ratio column
+    data.equity_index       = data.SPXIndex;            % From your screenshot
+    
+    % Update the following three to match your 'Signals' tab headers
+    data.overall_signal     = data.Overall_Signal;      
+    data.macro_signal       = data.Macro_Signal;        
+    data.vol_term_structure = data.VIX_VIX3M_Ratio;     
     
     % Calculate daily returns dynamically
     data.daily_returns = [0; diff(data.equity_index) ./ data.equity_index(1:end-1)];
 catch ME
     disp(ME.message);
-    error('Column mapping failed. Please update lines 28-31 with your exact Excel headers.');
+    error('Column mapping failed. Please check your exact Excel headers.');
 end
 
 % Handle missing data (Forward fill to prevent look-ahead bias)
