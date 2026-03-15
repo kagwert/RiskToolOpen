@@ -3,7 +3,8 @@
     "allow": [
       "mcp__matlab__check_matlab_code",
       "mcp__matlab__evaluate_matlab_code",
-      "mcp__matlab__detect_matlab_toolboxes"
+      "mcp__matlab__detect_matlab_toolboxes",
+      "Bash(pdflatex -interaction=nonstopmode payrollsMomentum_doc.tex)"
     ]
   }
 }

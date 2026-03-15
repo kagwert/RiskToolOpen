@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__matlab__evaluate_matlab_code",
+      "mcp__matlab__check_matlab_code",
+      "mcp__matlab__run_matlab_file",
+      "Bash(where pdflatex 2>/dev/null || where xelatex 2>/dev/null || echo \"latex_not_found\")"
+    ]
+  }
+}

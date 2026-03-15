@@ -1,0 +1,60 @@
+\relax 
+\providecommand\zref@newlabel[2]{}
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Overview and Motivation}{2}{section.1}\protected@file@percent }
+\newlabel{sec:overview}{{1}{2}{Overview and Motivation}{section.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {2}Data Source}{2}{section.2}\protected@file@percent }
+\newlabel{sec:data}{{2}{2}{Data Source}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}FRED PAYEMS}{2}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Fetching and Caching}{2}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Signal Construction Pipeline}{2}{section.3}\protected@file@percent }
+\newlabel{sec:pipeline}{{3}{2}{Signal Construction Pipeline}{section.3}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Signal construction pipeline.}}{3}{figure.caption.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Step 1 — First Difference}{3}{subsection.3.1}\protected@file@percent }
+\newlabel{sec:step1}{{3.1}{3}{Step 1 — First Difference}{subsection.3.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Step 2 — Trailing Median Prefilter (Numerator Path)}{3}{subsection.3.2}\protected@file@percent }
+\newlabel{sec:step2}{{3.2}{3}{Step 2 — Trailing Median Prefilter (Numerator Path)}{subsection.3.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Step 3 — Exponential Moving Average (Numerator Path)}{4}{subsection.3.3}\protected@file@percent }
+\newlabel{sec:step3}{{3.3}{4}{Step 3 — Exponential Moving Average (Numerator Path)}{subsection.3.3}{}}
+\newlabel{eq:alpha}{{4}{4}{Step 3 — Exponential Moving Average (Numerator Path)}{equation.3.4}{}}
+\newlabel{eq:ema}{{5}{4}{Step 3 — Exponential Moving Average (Numerator Path)}{equation.3.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Step 4 — Causal Expanding-Window Winsorization (Denominator Path)}{4}{subsection.3.4}\protected@file@percent }
+\newlabel{sec:step4}{{3.4}{4}{Step 4 — Causal Expanding-Window Winsorization (Denominator Path)}{subsection.3.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Step 5 — Rolling Standard Deviation (Denominator Path)}{5}{subsection.3.5}\protected@file@percent }
+\newlabel{sec:step5}{{3.5}{5}{Step 5 — Rolling Standard Deviation (Denominator Path)}{subsection.3.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Step 6 — Z-Score}{5}{subsection.3.6}\protected@file@percent }
+\newlabel{sec:step6}{{3.6}{5}{Step 6 — Z-Score}{subsection.3.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}Step 7 — Hyperbolic Tangent Compression}{6}{subsection.3.7}\protected@file@percent }
+\newlabel{sec:step7}{{3.7}{6}{Step 7 — Hyperbolic Tangent Compression}{subsection.3.7}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Calibration}{6}{section.4}\protected@file@percent }
+\newlabel{sec:calibration}{{4}{6}{Calibration}{section.4}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Approximate signal values under default parameters. $M_t$ shown as EMA-converged value after several months at the stated $\Delta P$. The last row illustrates the median prefilter's effect on a single-month anomaly.}}{7}{table.caption.2}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{tab:calib}{{1}{7}{Approximate signal values under default parameters. $M_t$ shown as EMA-converged value after several months at the stated $\dP $. The last row illustrates the median prefilter's effect on a single-month anomaly}{table.caption.2}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Parameter Reference}{8}{section.5}\protected@file@percent }
+\newlabel{sec:params}{{5}{8}{Parameter Reference}{section.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Parameter reference for \texttt  {payrollsMomentum}.}}{9}{table.caption.3}\protected@file@percent }
+\newlabel{tab:params}{{2}{9}{Parameter reference for \texttt {payrollsMomentum}}{table.caption.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Tuning Guide}{10}{section.6}\protected@file@percent }
+\newlabel{sec:tuning}{{6}{10}{Tuning Guide}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Reducing Noise Without Sacrificing Reactivity}{10}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Making the Signal More Decisive}{10}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Post-Shock Recovery}{10}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Faster Reaction to Trend Shifts}{10}{subsection.6.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Outputs}{10}{section.7}\protected@file@percent }
+\newlabel{sec:outputs}{{7}{10}{Outputs}{section.7}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {8}Dependencies and Portability}{11}{section.8}\protected@file@percent }
+\newlabel{sec:deps}{{8}{11}{Dependencies and Portability}{section.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Required Files}{11}{subsection.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}MATLAB Requirements}{11}{subsection.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Usage Examples}{11}{section.9}\protected@file@percent }
+\newlabel{sec:usage}{{9}{11}{Usage Examples}{section.9}{}}
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {1}{\ignorespaces Minimal usage}}{11}{lstlisting.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {2}{\ignorespaces Custom parameters}}{11}{lstlisting.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {3}{\ignorespaces Compare prefiltered vs.\ no prefilter}}{11}{lstlisting.3}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {4}{\ignorespaces Incremental cache refresh}}{12}{lstlisting.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {10}Mathematical Summary}{12}{section.10}\protected@file@percent }
+\newlabel{sec:summary}{{10}{12}{Mathematical Summary}{section.10}{}}
+\gdef \@abspage@last{13}

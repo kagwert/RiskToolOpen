@@ -1,0 +1,749 @@
+% ============================================================
+%  payrollsMomentum — Technical Function Documentation
+%  Quantitative Strategy Designer / SignalBuilder
+% ============================================================
+\documentclass[11pt, a4paper]{article}
+
+\usepackage[a4paper, margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{mdframed}
+
+% ---------- colours ----------
+\definecolor{matlabblue}{RGB}{0,70,127}
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{rulecol}{RGB}{180,180,180}
+\definecolor{noteblue}{RGB}{230,240,255}
+\definecolor{noteborder}{RGB}{100,140,200}
+
+% ---------- hyperref ----------
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = matlabblue,
+  urlcolor   = matlabblue,
+  citecolor  = matlabblue,
+  pdftitle   = {payrollsMomentum — Technical Documentation},
+  pdfauthor  = {SignalBuilder / Quantitative Strategy Designer}
+}
+
+% ---------- section formatting ----------
+\titleformat{\section}{\large\bfseries\color{matlabblue}}{{\thesection}}{1em}{}[\vspace{2pt}\hrule\vspace{4pt}]
+\titleformat{\subsection}{\normalsize\bfseries}{{\thesubsection}}{1em}{}
+
+% ---------- header / footer ----------
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small\textcolor{matlabblue}{\texttt{payrollsMomentum} — Technical Documentation}}
+\rhead{\small SignalBuilder}
+\cfoot{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ---------- MATLAB listings style ----------
+\lstdefinestyle{matlab}{
+  language        = Matlab,
+  backgroundcolor = \color{codebg},
+  basicstyle      = \ttfamily\footnotesize,
+  keywordstyle    = \color{matlabblue}\bfseries,
+  stringstyle     = \color{orange!70!black},
+  commentstyle    = \color{green!50!black}\itshape,
+  frame           = single,
+  framerule       = 0.4pt,
+  rulecolor       = \color{rulecol},
+  breaklines      = true,
+  columns         = flexible,
+  keepspaces      = true,
+  showstringspaces= false,
+  numbers         = left,
+  numberstyle     = \tiny\color{gray},
+  numbersep       = 6pt,
+}
+
+% ---------- note box ----------
+\newmdenv[
+  backgroundcolor = noteblue,
+  linecolor       = noteborder,
+  linewidth       = 1pt,
+  innerleftmargin = 8pt,
+  innerrightmargin= 8pt,
+  innertopmargin  = 6pt,
+  innerbottommargin=6pt,
+  skipabove       = 6pt,
+  skipbelow       = 6pt,
+]{notebox}
+
+% ---------- math operators ----------
+\DeclareMathOperator{\EMA}{EMA}
+\DeclareMathOperator{\Med}{median}
+\DeclareMathOperator{\std}{std}
+\DeclareMathOperator{\sgn}{sgn}
+\newcommand{\dP}{\Delta P}
+
+% ============================================================
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \vspace*{3cm}
+  {\LARGE\bfseries\color{matlabblue} \texttt{payrollsMomentum}}\\[0.6em]
+  {\large Technical Function Documentation}\\[2em]
+  \hrule height 1pt
+  \vspace{1.5em}
+  {\large Quantitative Strategy Designer — SignalBuilder}\\[0.4em]
+  {\normalsize \texttt{+Model/payrollsMomentum.m}}\\[2em]
+  \hrule height 0.4pt
+  \vspace{2em}
+  {\normalsize
+  \begin{tabular}{rl}
+    \textbf{Series}       & FRED \texttt{PAYEMS} — Total Nonfarm Payrolls (thousands, SA) \\
+    \textbf{Frequency}    & Monthly \\
+    \textbf{Output range} & $(-1,\,+1)$ \\
+    \textbf{Dependencies} & \texttt{Model.DataManager}, \texttt{Model.BaseModel} \\
+    \textbf{MATLAB}       & R2022b+ (built-in \texttt{sqlite}) \\
+  \end{tabular}
+  }
+  \vfill
+  {\small\color{gray} Generated: \today}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Overview and Motivation}
+\label{sec:overview}
+
+\texttt{payrollsMomentum} derives a smooth, bounded momentum signal
+from the U.S.\ Bureau of Labor Statistics' Total Nonfarm Payrolls
+series (FRED identifier \texttt{PAYEMS}), which is published monthly
+and seasonally adjusted. The signal is designed to:
+
+\begin{enumerate}[leftmargin=2em]
+  \item Sit strictly inside $(-1,+1)$ at all times, with no discontinuities,
+        so it can be consumed directly as a weight or risk-on/off multiplier.
+  \item Read strongly positive when payrolls are growing rapidly relative
+        to their recent historical norm.
+  \item Read near zero (and sign correctly) when growth is decelerating
+        or flat.
+  \item Read clearly negative when payrolls are declining.
+  \item Be robust to three distinct sources of distortion that afflict
+        na\"{\i}ve implementations: isolated one-month anomalies
+        (weather, strikes, seasonal revisions), regime changes in
+        volatility (e.g.\ the post-COVID recovery), and catastrophic
+        single-month shocks (e.g.\ April 2020: $-20{,}700$K, roughly
+        30 times the magnitude of a typical recession month).
+\end{enumerate}
+
+The labour market is a lagging macroeconomic indicator, so the signal
+is primarily useful as a \emph{regime filter} — confirming or
+challenging risk-on positioning established by leading indicators —
+rather than as a high-frequency timing tool.
+
+% ============================================================
+\section{Data Source}
+\label{sec:data}
+
+\subsection{FRED PAYEMS}
+
+\textbf{Series:} Total Nonfarm Payrolls (All Employees, Thousands of
+Persons, Seasonally Adjusted, Monthly). Released by the Bureau of
+Labor Statistics on the first Friday of each month for the prior month.
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Coverage}: January 1939 -- present ($\sim$1{,}000 observations).
+  \item \textbf{Units}: Thousands of jobs.
+  \item \textbf{Revisions}: The initial print is revised twice (preliminary
+        and final), typically within two months. \texttt{FRED} always
+        provides the most recently revised vintage.
+  \item \textbf{Typical range}: Level $\approx 60{,}000$K (1970) to
+        $158{,}000$K (2024). Monthly change $\dP \in [-21{,}000, +4{,}000]$K,
+        with the April 2020 COVID shock being the extreme outlier.
+\end{itemize}
+
+\subsection{Fetching and Caching}
+
+Data is retrieved via \texttt{Model.DataManager.fetch\_fred(\textquotesingle PAYEMS\textquotesingle)},
+which calls the FRED REST API on the first run and subsequently serves
+data from a local SQLite-backed \texttt{.mat} cache. All subsequent
+calls within a session — and across sessions until \texttt{update\_data}
+is called — are served from cache at zero network cost.
+
+% ============================================================
+\section{Signal Construction Pipeline}
+\label{sec:pipeline}
+
+Let $P_t$ denote the raw PAYEMS level (thousands of jobs) at month $t$.
+The pipeline transforms $P_t$ into a signal $S_t \in (-1, +1)$
+through seven sequential steps. Two independent processing paths are
+maintained — a \emph{numerator path} and a \emph{denominator path} —
+which are combined in the final steps.
+
+\begin{figure}[H]
+\centering
+\renewcommand{\arraystretch}{1.6}
+\begin{tabular}{clcl}
+\toprule
+\textbf{Step} & \textbf{Operation} & \textbf{Path} & \textbf{Output} \\
+\midrule
+1 & First difference          & Both   & $\dP_t$ \\
+2 & Trailing median prefilter & Num.   & $\tilde{\dP}_t$ \\
+3 & Exponential moving average& Num.   & $M_t$ \\
+4 & Causal winsorization      & Denom. & $\dP^w_t$ \\
+5 & Rolling standard deviation& Denom. & $\sigma_t$ \\
+6 & Z-score                   & Merge  & $z_t$ \\
+7 & Hyperbolic tangent         & Output & $S_t$ \\
+\bottomrule
+\end{tabular}
+\caption{Signal construction pipeline.}
+\end{figure}
+
+% ============================================================
+\subsection{Step 1 — First Difference}
+\label{sec:step1}
+
+\begin{equation}
+  \dP_t \;=\; P_t \;-\; P_{t-1}, \qquad t = 2, 3, \ldots, n
+\end{equation}
+
+$\dP_t$ is the net monthly job additions (thousands). It is the
+fundamental momentum quantity: positive values indicate job creation,
+negative values indicate destruction.
+
+\textbf{Rationale.} Using the level $P_t$ directly would conflate
+the secular upward trend in total employment (driven by population
+growth) with cyclical acceleration. First-differencing removes the
+stochastic trend and isolates the flow of new jobs — the signal
+relevant to business cycle positioning.
+
+\subsection{Step 2 — Trailing Median Prefilter (Numerator Path)}
+\label{sec:step2}
+
+\begin{equation}
+  \tilde{\dP}_t \;=\; \Med\!\bigl(\dP_{t-W_{\mathrm{pre}}+1},\;\ldots,\;\dP_t\bigr),
+  \qquad W_{\mathrm{pre}} \geq 1
+\end{equation}
+
+where $W_{\mathrm{pre}}$ is controlled by \texttt{PrefilterWindow}
+(default 3). The median is computed over trailing (past) observations
+only, making it strictly causal.
+
+\textbf{Rationale.} Monthly payroll data contains transient
+measurement noise that cannot be explained by genuine labour-market
+dynamics:
+
+\begin{itemize}[leftmargin=2em]
+  \item \emph{Weather distortions}: Unusually severe winter storms
+        suppress construction and leisure hiring for a single month.
+  \item \emph{Strike effects}: A major labour action (e.g.\ the UAW
+        strike of 2023) temporarily removes workers from the count.
+  \item \emph{Seasonal revision anomalies}: BLS benchmark revisions
+        create apparent one-month spikes in historical data.
+\end{itemize}
+
+The median gate handles these cases with a key property: a single
+anomalous print in a window of three is always replaced by the median
+of its two neighbours. Two or more months moving in the same
+direction pass through unchanged. Contrast this with increasing the
+EMA half-life (Step 3): a longer EMA applies proportional additional
+lag to \emph{all} movements — genuine trend shifts as well as noise.
+The median adds at most one month of lag to genuine regime changes
+while completely suppressing isolated prints.
+
+Formally, for a window $\{x_1, x_2, x_3\}$ where $x_1, x_3$ are
+``normal'' and $x_2$ is an anomalous spike:
+\begin{equation}
+  \Med(x_1, x_2, x_3) = x_{\text{middle value}} \approx x_1 \text{ or } x_3
+  \quad \text{(not } x_2)
+\end{equation}
+
+When \texttt{PrefilterWindow} $= 1$, Step~2 is a no-op:
+$\tilde{\dP}_t = \dP_t$.
+
+\subsection{Step 3 — Exponential Moving Average (Numerator Path)}
+\label{sec:step3}
+
+\begin{align}
+  \alpha &\;=\; 1 - \exp\!\left(-\frac{\ln 2}{\tau}\right) \label{eq:alpha}\\[6pt]
+  M_t &\;=\; \alpha\,\tilde{\dP}_t \;+\; (1-\alpha)\,M_{t-1} \label{eq:ema}
+\end{align}
+
+where $\tau$ is \texttt{SmoothHalfLife} (default 3 months).
+
+\textbf{Half-life semantics.} The smoothing factor $\alpha$ in
+equation~\eqref{eq:alpha} is derived from the half-life condition:
+the weight assigned to an observation $\tau$ periods in the past
+should equal $\tfrac{1}{2}$ the weight of the current observation.
+Expanding the EMA recursion:
+\begin{equation}
+  M_t \;=\; \sum_{k=0}^{\infty} \alpha\,(1-\alpha)^k\,\tilde{\dP}_{t-k}
+\end{equation}
+The weight on $\tilde{\dP}_{t-\tau}$ is $\alpha(1-\alpha)^\tau$.
+Setting this equal to half the weight on $\tilde{\dP}_t$ (which is
+$\alpha$):
+\begin{equation}
+  (1-\alpha)^\tau = \tfrac{1}{2}
+  \;\Longrightarrow\;
+  \tau = \frac{-\ln 2}{\ln(1-\alpha)}
+  \;\Longrightarrow\;
+  \alpha = 1 - e^{-\ln2/\tau}
+\end{equation}
+
+This parameterisation is preferable to specifying $\alpha$ directly
+because the half-life has an intuitive macroeconomic interpretation:
+with $\tau = 3$, a payroll print from six months ago carries only
+25\% of the weight of the current print.
+
+\textbf{NaN handling.} If FRED returns a gap in the series (revision
+hold-backs, early history), the EMA carries the previous value
+forward ($M_t = M_{t-1}$) rather than restarting, preserving
+continuity.
+
+\textbf{Rationale.} The EMA acts as a second-stage smoother on top
+of the median prefilter. Together, the two-stage filter (median then
+EMA) provides stronger noise suppression than either alone with less
+aggregate lag than increasing either parameter independently.
+
+\subsection{Step 4 — Causal Expanding-Window Winsorization (Denominator Path)}
+\label{sec:step4}
+
+Define the expanding percentile cap at time $t$:
+\begin{equation}
+  Q_t \;=\; \text{prctile}\!\left(\bigl\{|\dP_s| : s \leq t,\; \dP_s \neq \text{NaN}\bigr\},\;p_w\right)
+\end{equation}
+where $p_w$ is \texttt{WinsorPct} (default 95). The winsorized series is:
+\begin{equation}
+  \dP^w_t \;=\; \sgn(\dP_t)\cdot\min\!\bigl(|\dP_t|,\;Q_t\bigr)
+\end{equation}
+
+Winsorization is applied only once at least 24 valid observations
+have accumulated (to ensure $Q_t$ is estimated from a meaningful sample).
+
+\textbf{Rationale — the COVID problem.} The April 2020 payroll print
+($\dP \approx -20{,}700$K) is approximately 30 standard deviations
+from the pre-COVID conditional mean. Any rolling standard deviation
+computed over a window that contains this observation is massively
+inflated. With \texttt{NormWindow} $= 60$ months, \emph{every}
+rolling window from 2015 through 2025 includes April 2020, making
+the denominator $\sigma_t$ roughly 10--15 times larger than its
+pre-COVID value. Post-COVID boom months of $+800$K -- $+1{,}000$K
+then produce $z_t \approx 0.1$--$0.2$, collapsing the signal to near
+zero despite being genuinely strong job growth.
+
+Winsorizing at the 95th percentile replaces the $-20{,}700$K print
+with approximately $-350$K (the 95th percentile of $|\dP|$ computed
+over history up to April 2020), keeping $\sigma_t$ in a range
+representative of normal-regime volatility.
+
+\textbf{Causality.} $Q_t$ uses only $\{|\dP_s| : s \leq t\}$. No
+future data is used, preserving the signal's live-deployment
+integrity.
+
+\textbf{Separation of paths.} The winsorization is applied
+\emph{only} to the denominator path. The numerator EMA (Step 3)
+uses the prefiltered but unwinsorized series. This asymmetry is
+deliberate: we want the signal to correctly read \emph{strongly
+positive} during a genuine hiring boom — capping the numerator would
+suppress the very reading we wish to amplify.
+
+\subsection{Step 5 — Rolling Standard Deviation (Denominator Path)}
+\label{sec:step5}
+
+\begin{equation}
+  \sigma_t \;=\; \sqrt{\frac{1}{n_t - 1}
+    \sum_{s=t-W+1}^{t} \mathbf{1}[\dP^w_s \neq \text{NaN}]
+    \bigl(\dP^w_s - \bar{\dP}^w_t\bigr)^2}
+\end{equation}
+
+where $W$ is \texttt{NormWindow} (default 60 months), $n_t$ is the
+count of non-missing observations in the window, and
+$\bar{\dP}^w_t$ is the window mean. This is the sample (Bessel-corrected)
+standard deviation, computed by \texttt{movstd} with a strictly
+trailing window.
+
+\textbf{Rationale — adaptive normalisation.} Dividing the momentum
+estimate $M_t$ by $\sigma_t$ converts it to a dimensionless
+\emph{relative} quantity: how many standard deviations of typical
+payroll-change volatility does the current smoothed momentum
+represent? This is essential for two reasons:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \emph{Epoch comparability}: Payroll levels and absolute
+        monthly changes have grown with the labour force. A change
+        of $+200$K in 1965 (workforce $\approx 60$M) is proportionally
+        larger than the same change in 2024 (workforce $\approx 160$M).
+        Normalising by rolling $\sigma$ accounts for this scaling.
+  \item \emph{Regime sensitivity}: Volatility of monthly changes
+        varies significantly across cycles. A 60-month window captures
+        one full business cycle, providing a stable but responsive
+        reference distribution.
+\end{enumerate}
+
+A minimum of $\max(12, \lfloor W/2 \rfloor)$ valid observations is
+required; $\sigma_t$ is set to \texttt{NaN} (and the signal is
+\texttt{NaN}) during the warm-up period.
+
+\subsection{Step 6 — Z-Score}
+\label{sec:step6}
+
+\begin{equation}
+  z_t \;=\; \frac{M_t}{\sigma_t}
+\end{equation}
+
+$z_t$ is dimensionless and inherits the sign of $M_t$: positive
+when payrolls are growing above their recent volatility norm,
+negative when declining.
+
+\textbf{Cross-path interaction.} Because $M_t$ (numerator) is
+computed from the prefiltered series $\tilde{\dP}$ while $\sigma_t$
+(denominator) is computed from the winsorized raw series $\dP^w$,
+the two paths serve different roles:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{lll}
+\toprule
+\textbf{Path} & \textbf{Input} & \textbf{Purpose} \\
+\midrule
+Numerator   & $\tilde{\dP}$ (median prefiltered) & Responsive, noise-gated trend estimate \\
+Denominator & $\dP^w$ (winsorized raw)           & Stable, shock-robust volatility reference \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Step 7 — Hyperbolic Tangent Compression}
+\label{sec:step7}
+
+\begin{equation}
+  \boxed{S_t \;=\; \tanh\!\bigl(\lambda\,z_t\bigr)}
+  \qquad S_t \in (-1,\,+1)
+\end{equation}
+
+where $\lambda$ is \texttt{TanhScale} (default 1.0).
+
+\textbf{Why \texttt{tanh}?}
+
+$\tanh$ is the natural choice for mapping an unbounded real-valued
+signal to a bounded interval. Its key properties for this application are:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Boundedness}: $\tanh : \mathbb{R} \to (-1,+1)$
+        strictly, with no clipping discontinuities.
+  \item \textbf{Odd symmetry}: $\tanh(-x) = -\tanh(x)$, so
+        positive and negative momentum are treated symmetrically.
+  \item \textbf{Linearity near zero}: For small $|z|$,
+        $\tanh(\lambda z) \approx \lambda z$, giving fine-grained
+        discrimination between modest positive growth and near-flat conditions.
+  \item \textbf{Soft saturation}: $\tanh(\lambda z) \to \pm 1$ as
+        $z \to \pm\infty$, but never reaches $\pm 1$ for any finite
+        $z$. One extreme month cannot push the signal to its maximum;
+        sustained directionality is required.
+  \item \textbf{Smoothness}: $\tanh$ is infinitely differentiable,
+        producing no discontinuities that could cause numerical issues
+        in downstream optimisers.
+\end{enumerate}
+
+\textbf{Derivative:}
+\begin{equation}
+  \frac{d}{dz}\tanh(\lambda z) \;=\; \lambda\,\bigl(1 - \tanh^2(\lambda z)\bigr)
+\end{equation}
+The slope is maximised at $z = 0$ (value $\lambda$) and decays to
+zero as $|z| \to \infty$ — exactly the desired behaviour for a
+momentum signal that should be \emph{sensitive to changes} when near
+neutral and \emph{stable} when already extreme.
+
+\textbf{Effect of \texttt{TanhScale} $\lambda$:}
+\begin{equation}
+  \lambda \uparrow \;\Rightarrow\; \text{signal saturates faster (more decisive)}
+  \qquad
+  \lambda \downarrow \;\Rightarrow\; \text{signal stays more graded near extremes}
+\end{equation}
+
+At $\lambda = 1$, $z = 1$ maps to $\tanh(1) \approx 0.76$. This
+means a smoothed payroll print one historical standard deviation
+above the rolling mean produces a signal of about $+0.76$ — clearly
+positive but not at the ceiling, leaving room to strengthen further.
+
+% ============================================================
+\section{Calibration}
+\label{sec:calibration}
+
+Table~\ref{tab:calib} gives approximate signal values for
+representative payroll regimes under default parameters
+(\texttt{PrefilterWindow}$=3$, \texttt{SmoothHalfLife}$=3$,
+\texttt{NormWindow}$=60$, \texttt{TanhScale}$=1.0$, \texttt{WinsorPct}$=95$).
+The rolling standard deviation of winsorized $\dP$ over the full
+post-1970 sample is approximately $\sigma \approx 130$K.
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{lrrrrl}
+\toprule
+\textbf{Regime} & $\dP_t$ (K) & $M_t$ (K) & $\sigma_t$ (K) & $z_t$ & $S_t \approx$ \\
+\midrule
+Post-COVID hiring boom     & $+900$  & $+750$  & 130 & $+5.8$ & $+0.99$ \\
+Strong expansion           & $+400$  & $+360$  & 130 & $+2.8$ & $+0.99$ \\
+Solid expansion            & $+200$  & $+185$  & 130 & $+1.4$ & $+0.89$ \\
+Moderate growth            & $+100$  & $+95$   & 130 & $+0.7$ & $+0.61$ \\
+Stalling (near zero)       & $+20$   & $+20$   & 130 & $+0.2$ & $+0.16$ \\
+Flat / no-growth           & $0$     & $0$     & 130 & $0.0$  & $0.00$  \\
+Mild contraction           & $-100$  & $-95$   & 130 & $-0.7$ & $-0.61$ \\
+Recession                  & $-300$  & $-270$  & 130 & $-2.1$ & $-0.97$ \\
+Isolated 1-month spike     & $\pm500$ & $\approx 0$ & 130 & $\approx 0$ & $\approx 0.00$ \\
+\bottomrule
+\end{tabular}
+\caption{Approximate signal values under default parameters.
+$M_t$ shown as EMA-converged value after several months at the stated $\dP$.
+The last row illustrates the median prefilter's effect on a single-month anomaly.}
+\label{tab:calib}
+\end{table}
+
+% ============================================================
+\section{Parameter Reference}
+\label{sec:params}
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.5}
+\begin{tabular}{p{3.8cm} p{1.4cm} p{1.4cm} p{7.4cm}}
+\toprule
+\textbf{Parameter} & \textbf{Type} & \textbf{Default} & \textbf{Description and guidance} \\
+\midrule
+\texttt{PrefilterWindow} &
+  integer $\geq 1$ &
+  3 &
+  Length $W_{\mathrm{pre}}$ of the trailing median window applied to $\dP$ before the EMA. \newline
+  1 = disabled; 3 = removes isolated single-month anomalies; 5 = removes up to two consecutive anomalous months. Larger values reduce noise but increase the lag for genuine inflection points by at most $\lfloor W_{\mathrm{pre}}/2 \rfloor$ months. \\
+
+\texttt{SmoothHalfLife} &
+  double $> 0$ &
+  3 &
+  EMA half-life $\tau$ in months. Controls how quickly the smoothed momentum $M_t$ adapts to new prints.\newline
+  Lower ($\tau=2$): faster, noisier. Higher ($\tau=6$): slower, smoother. Increasing this is \emph{not} a substitute for \texttt{PrefilterWindow}: it adds lag to genuine signals proportionally. \\
+
+\texttt{NormWindow} &
+  integer $\geq 12$ &
+  60 &
+  Trailing window width $W$ (months) for computing $\sigma_t$ from winsorized $\dP^w$.\newline
+  60 months $\approx$ one business cycle: stable enough to smooth regime transitions, short enough to respond to structural shifts in payroll volatility over a decade. \\
+
+\texttt{TanhScale} &
+  double $> 0$ &
+  1.0 &
+  Scale parameter $\lambda$ applied to $z_t$ before $\tanh$. Stretches or compresses the signal's dynamic range.\newline
+  $\lambda > 1$: signal saturates closer to $\pm 1$ for moderate $z$ — more binary/decisive.\newline
+  $\lambda < 1$: signal stays graded across a wider range of $z$ — more analogue. \\
+
+\texttt{WinsorPct} &
+  double $\in [0, 100)$ &
+  95 &
+  Expanding-window percentile $p_w$ used to compute the winsorization cap $Q_t$ for the denominator path.\newline
+  0 = no winsorization (original behaviour). 95 caps the top 5\% of $|\dP|$ observations cumulatively seen up to $t$. Increase to 97--98 for a lighter touch; decrease toward 90 for more aggressive shock-proofing of $\sigma_t$. \\
+
+\texttt{StartDate} &
+  string &
+  \texttt{""} &
+  Optional FRED fetch start date in \texttt{'yyyy-MM-dd'} format. Empty string requests the full PAYEMS history (January 1939 -- present). Note: signal warm-up requires at least \texttt{NormWindow}$+2$ valid observations before $S_t$ is non-NaN. \\
+\midrule
+\texttt{dm} &
+  \texttt{DataManager} &
+  (required) &
+  Initialised \texttt{Model.DataManager} handle. Must have \texttt{init()} called and \texttt{FredApiKey} set. \\
+\bottomrule
+\end{tabular}
+\caption{Parameter reference for \texttt{payrollsMomentum}.}
+\label{tab:params}
+\end{table}
+
+% ============================================================
+\section{Tuning Guide}
+\label{sec:tuning}
+
+\subsection{Reducing Noise Without Sacrificing Reactivity}
+
+\begin{itemize}[leftmargin=2em]
+  \item Increase \texttt{PrefilterWindow} from 3 to 5. This suppresses
+        up to two consecutive anomalous prints while adding at most
+        2 months of lag to genuine inflections.
+  \item \emph{Avoid} compensating for noise by increasing
+        \texttt{SmoothHalfLife} beyond 4--5: the resulting lag on
+        genuine recessions and recoveries becomes macroeconomically
+        significant.
+\end{itemize}
+
+\subsection{Making the Signal More Decisive}
+
+\begin{itemize}[leftmargin=2em]
+  \item Increase \texttt{TanhScale} to 1.3--1.5. Solid expansion
+        months ($+150$K, $z \approx 1.1$) then map to
+        $\tanh(1.5 \times 1.1) \approx 0.94$ rather than $0.80$.
+  \item The signal still cannot reach $\pm 1$ for any finite input.
+\end{itemize}
+
+\subsection{Post-Shock Recovery}
+
+\begin{itemize}[leftmargin=2em]
+  \item If the signal is visibly muted for several years following a
+        shock event, increase \texttt{WinsorPct} from 95 to 97.
+        This applies a lighter cap, preserving more of the historical
+        volatility in $\sigma_t$ while still preventing the catastrophic
+        outlier from dominating.
+  \item Do not increase \texttt{WinsorPct} beyond 99: at that point
+        the protection against genuine extreme shocks is lost.
+\end{itemize}
+
+\subsection{Faster Reaction to Trend Shifts}
+
+\begin{itemize}[leftmargin=2em]
+  \item Reduce \texttt{SmoothHalfLife} from 3 to 2. With
+        $\alpha = 1 - e^{-\ln2/2} \approx 0.293$, a genuine
+        multi-month payroll shift reaches 75\% of its full signal
+        strength roughly one month sooner.
+  \item Consider also reducing \texttt{PrefilterWindow} from 3 to 1
+        (disabled) if the additional half-month of lag introduced by
+        the median gate is unacceptable in your application.
+\end{itemize}
+
+% ============================================================
+\section{Outputs}
+\label{sec:outputs}
+
+The function returns a \texttt{timetable} with \texttt{RowTimes}
+preserved from the FRED series (UTC timezone, first day of month):
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{llll}
+\toprule
+\textbf{Variable} & \textbf{Units} & \textbf{Range} & \textbf{Description} \\
+\midrule
+\texttt{Payrolls}   & K jobs     & $[60{,}000,\,160{,}000]$ & Raw PAYEMS level \\
+\texttt{dPayrolls}  & K jobs/mo  & $(-\infty,\,+\infty)$     & Raw MoM change \\
+\texttt{SmoothedMom}& K jobs/mo  & $(-\infty,\,+\infty)$     & Prefiltered + EMA momentum ($M_t$) \\
+\texttt{Signal}     & —          & $(-1,\,+1)$               & Final bounded signal ($S_t$) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The timetable \texttt{Description} property encodes the parameters
+used to generate it:
+\begin{lstlisting}[style=matlab, numbers=none]
+>> tt.Properties.Description
+ans = 'PAYEMS momentum | PrefilterWin=3, SmoothHL=3 mo, NormWin=60 mo, TanhScale=1, WinsorPct=95'
+\end{lstlisting}
+
+% ============================================================
+\section{Dependencies and Portability}
+\label{sec:deps}
+
+\subsection{Required Files}
+To run \texttt{payrollsMomentum} outside the SignalBuilder project,
+copy only:
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{+Model/payrollsMomentum.m}
+  \item \texttt{+Model/DataManager.m}
+  \item \texttt{+Model/BaseModel.m}
+\end{itemize}
+
+\subsection{MATLAB Requirements}
+\begin{itemize}[leftmargin=2em]
+  \item MATLAB R2022b or later (built-in \texttt{sqlite} function).
+        R2021b requires the Database Toolbox for \texttt{sqlite}.
+  \item No Statistics Toolbox: \texttt{prctile} has been replaced by
+        the local helper \texttt{payrollsMomentum\_prctile} (nearest-rank
+        method, implemented with \texttt{sort} and index arithmetic).
+  \item Network access on the first run for the FRED API call.
+        Subsequent runs are served from local cache at zero network cost.
+\end{itemize}
+
+% ============================================================
+\section{Usage Examples}
+\label{sec:usage}
+
+\begin{lstlisting}[style=matlab, caption={Minimal usage}]
+dm = Model.DataManager();
+dm.init();
+tt = Model.payrollsMomentum(dm);
+\end{lstlisting}
+
+\begin{lstlisting}[style=matlab, caption={Custom parameters}]
+tt = Model.payrollsMomentum(dm, ...
+    PrefilterWindow = 5,   ... % stronger noise gate
+    SmoothHalfLife  = 2,   ... % faster reaction
+    TanhScale       = 1.3, ... % more decisive signal
+    WinsorPct       = 97,  ... % lighter shock cap
+    StartDate       = "1990-01-01");
+\end{lstlisting}
+
+\begin{lstlisting}[style=matlab, caption={Compare prefiltered vs.\ no prefilter}]
+tt_raw  = Model.payrollsMomentum(dm, PrefilterWindow=1);
+tt_filt = Model.payrollsMomentum(dm, PrefilterWindow=3);
+
+figure;
+yyaxis left
+bar(tt_filt.Time, tt_filt.dPayrolls, 'FaceAlpha', 0.3)
+ylabel('MoM change (K jobs)')
+
+yyaxis right
+plot(tt_raw.Time,  tt_raw.Signal,  ':', 'LineWidth', 1, ...
+    'DisplayName', 'No prefilter')
+hold on
+plot(tt_filt.Time, tt_filt.Signal, '-', 'LineWidth', 2, ...
+    'DisplayName', 'PrefilterWindow=3')
+yline(0, 'k--'); ylim([-1.1 1.1])
+ylabel('Signal'); legend; grid on
+title(tt_filt.Properties.Description)
+\end{lstlisting}
+
+\begin{lstlisting}[style=matlab, caption={Incremental cache refresh}]
+dm.update_data('PAYEMS');          % only fetches the delta from last cache date
+tt = Model.payrollsMomentum(dm);   % immediately uses refreshed cache
+\end{lstlisting}
+
+% ============================================================
+\section{Mathematical Summary}
+\label{sec:summary}
+
+For reference, the complete signal in closed form (suppressing NaN
+handling and warm-up logic):
+
+\begin{align}
+  \dP_t &= P_t - P_{t-1} \\[4pt]
+  \tilde{\dP}_t &= \Med_{s \in [t-W_{\mathrm{pre}}+1,\,t]}\!\bigl(\dP_s\bigr) \\[4pt]
+  M_t &= \alpha\,\tilde{\dP}_t + (1-\alpha)\,M_{t-1},
+    \quad \alpha = 1 - e^{-\ln2/\tau} \\[4pt]
+  Q_t &= \text{prctile}\!\left(\bigl\{|\dP_s|\bigr\}_{s \leq t},\; p_w\right) \\[4pt]
+  \dP^w_t &= \sgn(\dP_t)\cdot\min\!\bigl(|\dP_t|,\;Q_t\bigr) \\[4pt]
+  \sigma_t &= \std_{s \in [t-W+1,\,t]}\!\bigl(\dP^w_s\bigr) \\[4pt]
+  z_t &= \frac{M_t}{\sigma_t} \\[6pt]
+  S_t &= \tanh\!\bigl(\lambda\,z_t\bigr) \;\in\; (-1,\,+1)
+\end{align}
+
+\textbf{Parameters:}
+$W_{\mathrm{pre}}$ (\texttt{PrefilterWindow}),
+$\tau$ (\texttt{SmoothHalfLife}),
+$W$ (\texttt{NormWindow}),
+$\lambda$ (\texttt{TanhScale}),
+$p_w$ (\texttt{WinsorPct}).
+
+\vfill
+\hrule
+\vspace{6pt}
+{\small\color{gray}
+\textbf{File}: \texttt{+Model/payrollsMomentum.m} \quad
+\textbf{Documentation}: \texttt{+Model/payrollsMomentum\_doc.pdf} \quad
+\textbf{Project}: SignalBuilder / Quantitative Strategy Designer
+}
+
+\end{document}

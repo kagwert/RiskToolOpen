@@ -1,0 +1,25 @@
+\contentsline {section}{\numberline {1}Overview and Motivation}{2}{section.1}%
+\contentsline {section}{\numberline {2}Data Source}{2}{section.2}%
+\contentsline {subsection}{\numberline {2.1}FRED PAYEMS}{2}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Fetching and Caching}{2}{subsection.2.2}%
+\contentsline {section}{\numberline {3}Signal Construction Pipeline}{2}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Step 1 — First Difference}{3}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Step 2 — Trailing Median Prefilter (Numerator Path)}{3}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Step 3 — Exponential Moving Average (Numerator Path)}{4}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Step 4 — Causal Expanding-Window Winsorization (Denominator Path)}{4}{subsection.3.4}%
+\contentsline {subsection}{\numberline {3.5}Step 5 — Rolling Standard Deviation (Denominator Path)}{5}{subsection.3.5}%
+\contentsline {subsection}{\numberline {3.6}Step 6 — Z-Score}{5}{subsection.3.6}%
+\contentsline {subsection}{\numberline {3.7}Step 7 — Hyperbolic Tangent Compression}{6}{subsection.3.7}%
+\contentsline {section}{\numberline {4}Calibration}{6}{section.4}%
+\contentsline {section}{\numberline {5}Parameter Reference}{8}{section.5}%
+\contentsline {section}{\numberline {6}Tuning Guide}{10}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Reducing Noise Without Sacrificing Reactivity}{10}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Making the Signal More Decisive}{10}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Post-Shock Recovery}{10}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}Faster Reaction to Trend Shifts}{10}{subsection.6.4}%
+\contentsline {section}{\numberline {7}Outputs}{10}{section.7}%
+\contentsline {section}{\numberline {8}Dependencies and Portability}{11}{section.8}%
+\contentsline {subsection}{\numberline {8.1}Required Files}{11}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}MATLAB Requirements}{11}{subsection.8.2}%
+\contentsline {section}{\numberline {9}Usage Examples}{11}{section.9}%
+\contentsline {section}{\numberline {10}Mathematical Summary}{12}{section.10}%

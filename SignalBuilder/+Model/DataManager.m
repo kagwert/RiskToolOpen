@@ -161,7 +161,7 @@ classdef DataManager < Model.BaseModel
 
             % Check cache freshness
             [cached, lastDate] = obj.loadFromCache(cacheKey);
-            if ~isempty(cached) && isempty(startDate)
+            if ~isempty(cached) && startDate == ""
                 obj.log('Cache hit for %s (last: %s)', seriesId, ...
                     datestr(lastDate, 'yyyy-mm-dd'));
                 tt = obj.standardise(cached, cacheKey);
@@ -169,7 +169,7 @@ classdef DataManager < Model.BaseModel
             end
 
             % Determine effective start date for API call
-            if ~isempty(cached) && isempty(startDate)
+            if ~isempty(cached) && startDate == ""
                 apiStart = datestr(lastDate + caldays(1), 'yyyy-mm-dd');
             elseif startDate ~= ""
                 apiStart = char(startDate);
@@ -386,7 +386,7 @@ classdef DataManager < Model.BaseModel
                 return;
             end
 
-            if ~isempty(cached)
+            if ~isempty(cached) && startDate == ""
                 d1 = datestr(lastDate + caldays(1), 'yyyymmdd');
             elseif startDate ~= ""
                 d1 = strrep(char(startDate), '-', '');
@@ -582,36 +582,54 @@ classdef DataManager < Model.BaseModel
         % -------------------------------------------------------------- %
         function tt = callYahooApi(obj, ticker, t1Unix, t2Unix)
         % callYahooApi  HTTP GET to Yahoo Finance v8/chart endpoint.
-            url  = Model.DataManager.YAHOO_BASE_URL + upper(ticker);
+        %
+        %   NOTE: webread does not accept a params struct in R2021b (same
+        %   constraint as callFredApi / callAlphaVantageApi).  Query
+        %   parameters are therefore embedded directly in the URL string.
+            queryStr = sprintf('?period1=%d&period2=%d&interval=1d&events=history', ...
+                round(t1Unix), round(t2Unix));
+            fullUrl  = [char(Model.DataManager.YAHOO_BASE_URL) ...
+                        upper(char(ticker)) queryStr];
             opts = weboptions( ...
                 'Timeout',     obj.TimeoutSec, ...
                 'ContentType', 'json', ...
                 'HeaderFields', {'User-Agent', ...
                     'Mozilla/5.0 (compatible; MATLAB DataManager)'});
-            params = struct( ...
-                'period1',  t1Unix, ...
-                'period2',  t2Unix, ...
-                'interval', '1d', ...
-                'events',   'history');
             try
-                resp = webread(char(url), params, opts);
+                resp = webread(fullUrl, opts);
             catch ME
                 error('SignalBuilder:DataManager:yahooHttpError', ...
                     'Yahoo Finance request failed: %s', ME.message);
             end
             try
-                result    = resp.chart.result{1};
-                timestamps = result.timestamp;
-                q         = result.indicators.quote{1};
-                dates = datetime(timestamps, 'ConvertFrom', 'posixtime', ...
-                    'TimeZone', 'America/New_York')';
-                open   = q.open(:);
-                high   = q.high(:);
-                low    = q.low(:);
-                close  = q.close(:);
-                volume = double(q.volume(:));
+                result     = resp.chart.result{1};
+                timestamps = double(result.timestamp(:));
+                q          = result.indicators.quote{1};
+
+                dates  = datetime(timestamps, 'ConvertFrom', 'posixtime', ...
+                    'TimeZone', 'America/New_York');
+
+                % Yahoo returns null as [] inside arrays; cell2mat converts
+                % cell arrays of numbers to vectors; non-cells pass through.
+                toVec = @(x) Model.DataManager.cell2mat_safe(x);
+                open   = toVec(q.open);
+                high   = toVec(q.high);
+                low    = toVec(q.low);
+                close  = toVec(q.close);
+                volume = toVec(q.volume);
+
+                % Trim to shortest length (Yahoo occasionally mismatches)
+                nRows = min([numel(dates), numel(close)]);
+                dates  = dates(1:nRows);
+                open   = open(1:nRows);
+                high   = high(1:nRows);
+                low    = low(1:nRows);
+                close  = close(1:nRows);
+                volume = volume(1:nRows);
+
                 tt = timetable(dates, open, high, low, close, volume, ...
                     'VariableNames', {'Open','High','Low','Close','Volume'});
+                tt.Properties.DimensionNames{1} = 'Time';
             catch ME
                 error('SignalBuilder:DataManager:yahooParseError', ...
                     'Failed to parse Yahoo response for %s: %s', ...
@@ -1012,6 +1030,25 @@ classdef DataManager < Model.BaseModel
         function tf = isToolboxAvailable(toolboxName)
             v = ver;
             tf = any(strcmp({v.Name}, toolboxName));
+        end
+
+        function v = cell2mat_safe(x)
+        % cell2mat_safe  Convert a JSON-parsed array to a numeric column vector.
+        %   Yahoo Finance returns null values as [] inside cell arrays.
+        %   This helper replaces each empty element with NaN before flattening.
+            if isnumeric(x)
+                v = double(x(:));
+            elseif iscell(x)
+                n = numel(x);
+                v = nan(n, 1);
+                for k = 1 : n
+                    if isnumeric(x{k}) && ~isempty(x{k})
+                        v(k) = double(x{k}(1));
+                    end
+                end
+            else
+                v = nan(numel(x), 1);
+            end
         end
     end
 end

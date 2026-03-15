@@ -1,0 +1,856 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{tocloft}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{multicol}
+\usepackage{caption}
+\usepackage{tabularx}
+
+\definecolor{codeblue}{RGB}{0,102,204}
+\definecolor{codegray}{RGB}{100,100,100}
+\definecolor{codepurple}{RGB}{153,0,153}
+\definecolor{backcolour}{RGB}{248,248,248}
+\definecolor{sectionblue}{RGB}{0,51,102}
+
+\lstdefinestyle{matlabstyle}{
+  backgroundcolor=\color{backcolour},
+  commentstyle=\color{codegray}\itshape,
+  keywordstyle=\color{codeblue}\bfseries,
+  stringstyle=\color{codepurple},
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{codegray!30},
+  numbers=left,
+  numberstyle=\tiny\color{codegray},
+  tabsize=4,
+  showstringspaces=false,
+  language=Matlab
+}
+\lstset{style=matlabstyle}
+
+\hypersetup{colorlinks=true,linkcolor=sectionblue,urlcolor=codeblue,citecolor=codepurple}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textsc{RiskTool Documentation}}
+\fancyhead[R]{\thepage}
+\fancyfoot[C]{\small\textcolor{codegray}{Confidential --- For Internal Use Only}}
+\renewcommand{\headrulewidth}{0.5pt}
+
+\titleformat{\section}{\Large\bfseries\color{sectionblue}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{sectionblue!80}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{sectionblue!60}}{\thesubsubsection}{1em}{}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{2cm}
+{\Huge\bfseries\color{sectionblue} RiskTool}\\[0.5cm]
+{\LARGE\color{sectionblue!70} Technical Documentation \& User Manual}\\[2cm]
+{\Large Portfolio Risk Optimization \& Signal Strategy Framework}\\[1cm]
+\rule{\textwidth}{1pt}\\[1.5cm]
+{\large\textbf{Modules:}}\\[0.3cm]
+{\large Global Asset Allocation (GAA)}\\[0.2cm]
+{\large Signal-Driven Equity/Cash Strategy}\\[0.2cm]
+{\large Portfolio Risk Optimizer}\\[0.2cm]
+{\large Volatility Surface Tooling}\\[2cm]
+\vfill
+{\large MATLAB R2024b+}\\[0.3cm]
+{\large Version 2.0 --- February 2026}\\[0.5cm]
+{\small Confidential --- For Internal Use Only}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+\section{System Overview}
+
+\subsection{Introduction}
+RiskTool is a comprehensive MATLAB framework for quantitative portfolio management. It provides three integrated modules:
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Portfolio Risk Optimizer} --- Full-featured GUI for risk analysis, optimization, and scenario testing across multiple asset classes.
+  \item \textbf{Global Asset Allocation (GAA)} --- Strategic and tactical allocation across 17 asset classes with walk-forward backtesting.
+  \item \textbf{Signal Strategy} --- Equity/cash allocation driven by momentum, macro, and composite signals with three strategy modes.
+\end{enumerate}
+A standalone \textbf{Volatility Surface} utility for SPY options completes the toolkit.
+
+\subsection{Architecture}
+The codebase is organized into MATLAB packages with clear separation of concerns:
+
+\begin{center}
+\begin{tabularx}{\textwidth}{l l X}
+\toprule
+\textbf{Layer} & \textbf{Location} & \textbf{Purpose} \\
+\midrule
+GUI & Root & App Designer GUIs (\texttt{PortfolioRiskOptimizerApp}, \texttt{SignalStrategyApp}, \texttt{SignalBuilderDialog}) \\
+Entry Points & Root & Command-line launchers (\texttt{runGAA}, \texttt{run\_*App}) \\
+GAA Engine & \texttt{+gaa/} & 17 functions: config, data, CMA, SAA, tactical, backtest, reporting \\
+Signal Engine & \texttt{+sigstrat/} & 16 functions: signals, normalization, mapping, 3 strategy modes \\
+Utilities & Root & Vol surface (\texttt{GetVolSurface}), test suites \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Requirements}
+\begin{itemize}[leftmargin=2em]
+  \item MATLAB R2024b or later (App Designer, \texttt{uifigure}, \texttt{uigridlayout})
+  \item \textbf{Optimization Toolbox} --- required for \texttt{fmincon}, \texttt{quadprog}
+  \item \textbf{Statistics and Machine Learning Toolbox} --- required for decision trees, cross-validation, \texttt{normcdf}
+  \item \textbf{Global Optimization Toolbox} --- optional, for genetic algorithm in robust optimization
+  \item Internet access for Stooq and FRED data downloads (cached for 24 hours)
+\end{itemize}
+
+\subsection{Quick Start}
+\begin{lstlisting}
+%% Launch the Portfolio Risk Optimizer GUI
+run_PortfolioRiskOptimizerApp
+
+%% Launch the Signal Strategy GUI
+run_SignalStrategyApp
+
+%% Run GAA from the command line
+results = runGAA('StartDate','20120101', 'Source','Stooq', 'Plot',true);
+
+%% Query implied volatility
+iv = GetVolSurface(0.25, 0.95, struct('Type','moneyness','Plot',true));
+\end{lstlisting}
+\newpage
+\section{Portfolio Risk Optimizer}
+
+\subsection{Overview}
+The \texttt{PortfolioRiskOptimizerApp} is the main GUI for multi-asset portfolio analysis. It provides:
+\begin{itemize}[leftmargin=2em]
+  \item Risk metrics: VaR and CVaR via Historical, Parametric, and Monte Carlo methods
+  \item Five optimization objectives: Min Variance, Max Sharpe, Min CVaR, Min VaR, Risk Parity (ERC)
+  \item Strategic Asset Allocation (SAA) and Tactical Asset Allocation (TAA) with combined weights
+  \item Sensitivity analysis ($+1$\% asset shocks) and scenario PnL approximation
+  \item Conditional historical bootstrap via user-defined logical expressions
+  \item Tracking error analysis and attribution against a benchmark
+  \item Performance comparison tab with multiple portfolio configurations
+\end{itemize}
+
+\subsection{Launch}
+\begin{lstlisting}
+run_PortfolioRiskOptimizerApp   %% GUI launcher
+app = PortfolioRiskOptimizerApp; %% programmatic access
+\end{lstlisting}
+
+\subsection{Tabs and Workflow}
+The application is organized into tabs. The typical workflow proceeds left to right:
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Data \& Weights} --- Import or download asset data; define SAA and TAA weights; toggle assets active/inactive.
+  \item \textbf{Risk Metrics} --- Compute VaR, CVaR, and contribution analysis at the portfolio level.
+  \item \textbf{Optimization} --- Run the selected optimizer subject to constraints (long-only, equity/bond bounds, leverage).
+  \item \textbf{Scenario Analysis} --- Define macro scenarios, compute approximate PnL impact, and stress-test the portfolio.
+  \item \textbf{Sensitivity} --- Per-asset $+1$\% shock impact on portfolio risk and return.
+  \item \textbf{Bootstrap} --- Conditional resampling (e.g., ``VIX $>$ 25 \& SP500\_ret $<$ 0') for tail-risk analysis.
+  \item \textbf{Performance} --- Compare strategy vs.\ benchmark cumulative returns, drawdowns, and rolling metrics.
+\end{enumerate}
+
+\subsection{Optimization Methods}
+\begin{center}
+\begin{tabularx}{\textwidth}{l X}
+\toprule
+\textbf{Method} & \textbf{Description} \\
+\midrule
+Min Variance & Minimize portfolio variance $w^\top \Sigma w$ subject to constraints \\
+Max Sharpe & Maximize $(\mu^\top w - r_f) / \sqrt{w^\top \Sigma w}$ \\
+Min CVaR & Minimize expected shortfall at the specified confidence level \\
+Min VaR & Minimize Value-at-Risk at the specified confidence level \\
+Risk Parity & Equal Risk Contribution --- each asset contributes equally to total portfolio risk \\
+\bottomrule
+\end{tabularx}
+\end{center}
+\newpage
+\section{Global Asset Allocation (GAA)}
+
+\subsection{Overview}
+The GAA module implements a complete strategic and tactical asset allocation framework across 17 asset classes. It can be run from the command line via \texttt{runGAA()} or integrated into the Portfolio Risk Optimizer.
+
+\subsection{Asset Universe}
+The default universe (configured in \texttt{gaa.gaaConfig}) spans:
+\begin{center}
+\begin{tabularx}{\textwidth}{l l X}
+\toprule
+\textbf{Category} & \textbf{Assets} & \textbf{Tickers (Stooq)} \\
+\midrule
+Cash \& Bonds & Cash, UST Short, UST Long, TIPS, IG Credit, HY Credit & SHV.US, SHY.US, TLT.US, TIP.US, LQD.US, HYG.US \\
+Equities & US Large, US Small, Intl Dev, EM & SPY.US, IWM.US, EFA.US, EEM.US \\
+Alternatives & REITs, Commodities, Gold, Hedge Funds & VNQ.US, DJP.US, GLD.US, QAI.US \\
+FX & DXY (dollar index) & UUP.US \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Nine-Step Pipeline}
+The \texttt{runGAA()} function executes the following pipeline:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Configuration} (\texttt{gaa.gaaConfig}) --- Load asset universe, tickers, constraints, scenario definitions, and method selections.
+  \item \textbf{Market Data} (\texttt{gaa.downloadData}) --- Download daily prices from Stooq (or Bloomberg/Datastream), compute log returns, align dates. Results cached for 24 hours.
+  \item \textbf{Macro Data} (\texttt{gaa.downloadFRED}) --- Download 12 FRED series and compute 14 derived measures (VIX, yield slope, credit spreads, GDP/CPI growth, etc.).
+  \item \textbf{Capital Market Assumptions} (\texttt{gaa.computeCMA}) --- Estimate expected returns ($\mu$), volatilities, and the covariance matrix ($\Sigma$) via one of three methods.
+  \item \textbf{Strategic Allocation} (\texttt{gaa.computeSAA}) --- Optimize long-term weights using one of five methods, subject to equity/bond constraints.
+  \item \textbf{Tactical Signals} (\texttt{gaa.computeTacticalSignals}) --- Compute momentum, risk, and macro signals for tactical overlay.
+  \item \textbf{Combine Allocations} (\texttt{gaa.combineAllocations}) --- Blend SAA with tactical signals via Black--Litterman or linear overlay.
+  \item \textbf{Walk-Forward Backtest} (\texttt{gaa.backtestStrategy}) --- Historical simulation with rebalancing, transaction costs, and turnover tracking.
+  \item \textbf{Analysis \& Reporting} (\texttt{gaa.computePerformance}, \texttt{gaa.plotDashboard}, \texttt{gaa.generateReport}) --- Performance metrics, 6-panel dashboard, and \LaTeX/PDF report.
+\end{enumerate}
+
+\subsection{Capital Market Assumptions (CMA)}
+\begin{center}
+\begin{tabularx}{\textwidth}{l X}
+\toprule
+\textbf{Method} & \textbf{Description} \\
+\midrule
+BuildingBlock & Research Affiliates--style forward estimates combining FRED macro measures with equity risk premia, credit spreads, and real rates. \\
+Historical & Sample mean and covariance from historical returns, with Ledoit--Wolf shrinkage. \\
+BLEquilibrium & Reverse-optimize implied returns from market-cap weights using the Black--Litterman framework. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{SAA Optimization Methods}
+\begin{center}
+\begin{tabularx}{\textwidth}{l X}
+\toprule
+\textbf{Method} & \textbf{Description} \\
+\midrule
+MinimaxRegret & Robust allocation across 4 growth/inflation scenarios; minimizes worst-case regret. \\
+ScenarioWeighted & Scenario probability--weighted optimal portfolios. \\
+MaxSharpe & Standard mean--variance optimization for maximum Sharpe ratio. \\
+MinVariance & Global minimum variance portfolio. \\
+RiskParity & Equal Risk Contribution (ERC) --- each asset contributes equally to total risk. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Tactical Overlay}
+Tactical signals are computed from three categories:
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Momentum} --- Time-series (vol-scaled cumulative return) and cross-sectional (demeaned) momentum per asset.
+  \item \textbf{Risk} --- VIX level, credit spread regime, and volatility regime indicators.
+  \item \textbf{Macro} --- Yield curve slope, growth, and inflation momentum.
+\end{itemize}
+Signals are combined into a composite $\in [-1,+1]$ per asset. Two blending modes are available:
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Black--Litterman} --- Convert signals to views and blend with SAA via the BL posterior.
+  \item \textbf{Linear} --- Scale signals by the tactical budget and apply as additive deltas to SAA weights.
+\end{itemize}
+
+\subsection{Covariance Estimation}
+Robust covariance estimation is provided by \texttt{gaa.robustCovariance}:
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Ledoit--Wolf Shrinkage} --- Shrinks sample covariance toward a scaled identity target, with analytically optimal intensity $\delta \in [0,1]$.
+  \item \textbf{Marc\v{e}nko--Pastur Denoising} --- Optional eigenvalue clipping that replaces noise eigenvalues with their average, improving out-of-sample stability.
+\end{itemize}
+
+\subsection{Risk Decomposition}
+The function \texttt{gaa.computeRiskDecomp} provides:
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{MCR} --- Marginal Contribution to Risk: $\partial\sigma_p / \partial w_i$.
+  \item \textbf{CR} --- Contribution to Risk: $w_i \times \text{MCR}_i$.
+  \item \textbf{PCT} --- Percentage risk contribution: $\text{CR}_i / \sigma_p$.
+  \item \textbf{HHI} --- Herfindahl--Hirschman Index of risk concentration.
+  \item \textbf{ENB} --- Effective Number of Bets: $1/\text{HHI}$.
+  \item \textbf{DR} --- Diversification Ratio: $w^\top\sigma / \sigma_p$.
+\end{itemize}
+
+\subsection{Command-Line Usage}
+\begin{lstlisting}
+%% Full pipeline with defaults
+results = runGAA();
+
+%% Custom configuration
+results = runGAA('StartDate', '20150101', ...
+    'Source',    'Stooq', ...
+    'CMAMethod', 'BuildingBlock', ...
+    'SAAMethod', 'MinimaxRegret', ...
+    'CombineMethod', 'BL', ...
+    'TacticalBudget', 0.20, ...
+    'Plot', true);
+\end{lstlisting}
+\newpage
+\section{Signal Strategy}
+
+\subsection{Overview}
+The Signal Strategy module implements an equity/cash allocation system driven by quantitative signals. It supports three distinct strategy modes, each with its own optimization approach.
+
+\subsection{Launch}
+\begin{lstlisting}
+run_SignalStrategyApp   %% GUI
+\end{lstlisting}
+
+\subsection{Data Pipeline}
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Market Data} (\texttt{sigstrat.downloadMarketData}) --- S\&P 500 and T-Bill daily returns from Stooq, with SPY.US fallback and 24h caching.
+  \item \textbf{Macro Data} (\texttt{sigstrat.downloadMacroData}) --- 12 FRED series with 14 derived measures; shares pipeline with GAA where available.
+  \item \textbf{Signal Generation} --- Three sources:
+  \begin{itemize}
+    \item Demo signals (\texttt{sigstrat.generateDemoSignals}) --- 5 quick signals for exploration
+    \item Extended signals (\texttt{sigstrat.generateExtendedSignals}) --- 12 production signals across fast/medium/slow categories
+    \item Custom signals (\texttt{SignalBuilderDialog}) --- Interactive builder with 6 signal types
+  \end{itemize}
+\end{enumerate}
+
+\subsection{Signal Types}
+The \texttt{sigstrat.buildSignal} function supports six signal types, all producing output bounded in $[-1, +1]$:
+
+\subsubsection{Momentum}
+Vol-adjusted price momentum with expanding z-score and configurable activation function.
+
+\begin{center}
+\begin{tabularx}{\textwidth}{l l l X}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Range} & \textbf{Description} \\
+\midrule
+\texttt{lookback} & 126 & 21--504 & Lookback window in trading days \\
+\texttt{minHistory} & 252 & 42--1008 & Minimum observations for expanding z-score \\
+\texttt{volHalflife} & 32 & 10--120 & EWMA volatility halflife (days) \\
+\texttt{skipDays} & 0 & 0--21 & Skip recent days to avoid short-term reversal \\
+\texttt{volFloor} & 0 & $\geq 0$ & Min vol estimate; 0 = auto (5th percentile) \\
+\texttt{activation} & tanh & --- & Activation function (see below) \\
+\texttt{tanhScale} & 2 & 0.1--10 & Scaling divisor for activation \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The momentum signal at time $t$ is:
+\begin{equation}
+\text{mom}_t = \frac{\sum_{i=t-L-S+1}^{t-S} r_i}{\hat{\sigma}_t^{\text{EWMA}} \cdot \sqrt{L}}
+\end{equation}
+where $L$ is \texttt{lookback}, $S$ is \texttt{skipDays}, and $\hat{\sigma}_t^{\text{EWMA}}$ is the EWMA volatility.
+
+\subsubsection{EWMAC (Exponentially Weighted Moving Average Crossover)}
+EMA fast/slow crossover trend signal, following Levine--Pedersen (2016). Equivalent to TSMOM but smoother with lower turnover.
+
+\begin{center}
+\begin{tabularx}{\textwidth}{l l l X}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Range} & \textbf{Description} \\
+\midrule
+\texttt{fastSpan} & 16 & 2--128 & Fast EMA span \\
+\texttt{slowSpan} & 64 & 8--512 & Slow EMA span \\
+\texttt{volHalflife} & 32 & 10--120 & EWMA vol halflife \\
+\texttt{volFloor} & 0 & $\geq 0$ & Min vol estimate \\
+\texttt{activation} & tanh & --- & Activation function \\
+\texttt{tanhScale} & 2 & 0.1--10 & Activation scale \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The raw EWMAC signal is:
+\begin{equation}
+\text{EWMAC}_t = \frac{\text{EMA}_{\text{fast}}(P_t) - \text{EMA}_{\text{slow}}(P_t)}{\hat{\sigma}_t^{\text{EWMA}} \cdot P_t}
+\end{equation}
+
+\subsubsection{Ensemble (Multi-Lookback Momentum)}
+Combines momentum signals across multiple lookback windows. This is the single most impactful enhancement per practitioners (Moskowitz--Ooi--Pedersen 2012, Baltas--Kosowski 2020).
+
+\begin{center}
+\begin{tabularx}{\textwidth}{l l l X}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Range} & \textbf{Description} \\
+\midrule
+\texttt{lookbacks} & {[}21 63 126 252{]} & --- & Vector of lookback windows \\
+\texttt{method} & equal & --- & \texttt{equal} (equal weight) or \texttt{riskparity} ($1/\sigma$ weighting) \\
+\texttt{volHalflife} & 32 & 10--120 & EWMA vol halflife \\
+\texttt{skipDays} & 0 & 0--21 & Skip recent days \\
+\texttt{volFloor} & 0 & $\geq 0$ & Min vol estimate \\
+\texttt{activation} & tanh & --- & Activation function \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsubsection{MacroZ}
+Expanding robust z-score of a macro variable (e.g., VIX, HY\_Spread). Uses median/MAD for robustness to outliers.
+
+\begin{center}
+\begin{tabularx}{\textwidth}{l l l X}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Range} & \textbf{Description} \\
+\midrule
+\texttt{variable} & VIX & --- & Macro column name \\
+\texttt{minWindow} & 126 & 20--504 & Min observations for z-score \\
+\texttt{negate} & false & --- & Flip sign (e.g., lower VIX = bullish) \\
+\texttt{tanhScale} & 2 & 0.1--10 & Scaling divisor \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsubsection{MeanReversion}
+Distance from rolling moving average, z-scored and sign-flipped. Price above MA $\rightarrow$ expect reversion down $\rightarrow$ bearish signal.
+
+\subsubsection{Composite}
+Weighted average of multiple macro z-scores. User defines the variables, weights, and per-variable sign flips.
+
+\subsection{EWMA Volatility Estimator}
+All momentum-family signals (Momentum, EWMAC, Ensemble) use EWMA volatility instead of equal-weight standard deviation:
+\begin{equation}
+\hat{\sigma}^2_t = \lambda \hat{\sigma}^2_{t-1} + (1 - \lambda) r_t^2, \quad \lambda = \exp\left(-\frac{\ln 2}{h}\right)
+\end{equation}
+where $h$ is the halflife in days (default 32). This places more weight on recent observations, producing a smoother and more responsive vol estimate.
+
+\subsection{Volatility Floor}
+To prevent extreme leverage in low-volatility regimes, a vol floor is applied:
+\begin{equation}
+\hat{\sigma}_t = \max(\hat{\sigma}_t^{\text{EWMA}},\; \text{floor})
+\end{equation}
+When \texttt{volFloor} = 0 (auto), the floor is the 5th percentile of the trailing 504-day EWMA vol series. When $> 0$, it is used directly.
+
+\subsection{Activation Functions}
+Three activation functions map the z-scored signal to $[-1, +1]$:
+
+\begin{center}
+\begin{tabularx}{\textwidth}{l l X}
+\toprule
+\textbf{Name} & \textbf{Formula} & \textbf{Behavior} \\
+\midrule
+\texttt{tanh} & $\tanh(z/s)$ & Standard S-curve, saturates at $\pm 1$ (default) \\
+\texttt{sigmoid} & $2\,\Phi(z/s) - 1$ & Normal CDF scaled to $[-1,+1]$; lighter tails than tanh \\
+\texttt{revertSigmoid} & $c \cdot (z/s) \cdot e^{-z^2/(2s^2)}$ & Dao et al.\ (2021): position rises then falls for extreme signals, providing crash protection \\
+\bottomrule
+\end{tabularx}
+\end{center}
+where $s$ = \texttt{tanhScale}, $\Phi$ = standard normal CDF, and $c = (1 + 2/s^2)^{3/4}$.
+
+\subsection{Extended Signal Set (12 Signals)}
+The function \texttt{sigstrat.generateExtendedSignals} produces 12 production signals:
+
+\begin{center}
+\begin{tabularx}{\textwidth}{l l l X}
+\toprule
+\textbf{\#} & \textbf{Name} & \textbf{Speed} & \textbf{Description} \\
+\midrule
+1 & SPX\_Mom\_1m & Fast & 21d equity momentum \\
+2 & SPX\_Mom\_3m & Fast & 63d equity momentum \\
+3 & VIX\_Fast & Fast & Negated 63d VIX z-score \\
+4 & CreditFast & Fast & Negated 63d HY spread z-score \\
+5 & SPX\_Mom\_6m & Medium & 126d equity momentum \\
+6 & VIX\_Med & Medium & Negated 126d VIX z-score \\
+7 & YieldSlope\_Med & Medium & 126d yield slope z-score \\
+8 & FinConditions & Medium & VIX + credit + yield composite \\
+9 & SPX\_Mom\_12m & Slow & 252d equity momentum \\
+10 & VIX\_Slow & Slow & Negated 252d VIX z-score \\
+11 & MacroTrend & Slow & GDP + retail + industrial composite \\
+12 & CreditSlow & Slow & Negated 252d HY spread z-score \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Strategy Mode 1: Composite Signal}
+The \texttt{sigstrat.optimizeComposite} function:
+\begin{enumerate}[leftmargin=2em]
+  \item Computes a weighted average of normalized signals: $C_t = \sum_i w_i \cdot s_{i,t}$
+  \item Maps $C_t$ to equity weight via step-function thresholds
+  \item Optimizes weights and thresholds via grid search (in-sample Sharpe + return + drawdown penalty)
+  \item Reports in-sample and out-of-sample performance
+\end{enumerate}
+
+\subsection{Strategy Mode 2: Risk Budget}
+The \texttt{sigstrat.riskBudgetStrategy} function:
+\begin{enumerate}[leftmargin=2em]
+  \item Allocates a risk budget to each signal (default: equal)
+  \item Maps each signal to equity weight via a configurable translation function (Linear, Threshold, Sigmoid, Quantile, Piecewise, Spline, or Power)
+  \item Combines per-signal allocations weighted by budget
+  \item Supports optional macro conditioning
+\end{enumerate}
+
+\subsection{Strategy Mode 3: Decision Tree}
+The \texttt{sigstrat.decisionTreeStrategy} function:
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Rule-Based} --- User-defined rules (variable, operator, threshold $\rightarrow$ equity weight)
+  \item \textbf{Auto-Optimize} --- CART regression tree auto-fitted to predict equity weight $\in [0,1]$
+  \item Walk-forward cross-validation with expanding windows
+  \item Variable importance metrics from the fitted tree
+\end{enumerate}
+
+\subsection{Signal Normalization}
+The \texttt{sigstrat.normalizeSignals} function supports 5 methods:
+\begin{center}
+\begin{tabularx}{\textwidth}{l X}
+\toprule
+\textbf{Method} & \textbf{Description} \\
+\midrule
+RobustZ & Expanding robust z-score (median/MAD) $\rightarrow$ tanh (default) \\
+StandardZ & Expanding standard z-score $\rightarrow$ tanh \\
+RollingZ & Rolling-window z-score $\rightarrow$ tanh \\
+Percentile & Expanding percentile rank mapped to $[-1, +1]$ \\
+MinMax & Expanding min-max scaling to $[-1, +1]$ \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Signal-to-Weight Mapping}
+The \texttt{sigstrat.mapSignalToWeight} function maps signals from $[-1,+1]$ to equity weights $[0,1]$:
+\begin{center}
+\begin{tabularx}{\textwidth}{l X}
+\toprule
+\textbf{Method} & \textbf{Description} \\
+\midrule
+Step & Threshold-based discrete levels \\
+Linear & $(\text{signal} + 1) / 2$ \\
+Sigmoid & Smooth sigmoid mapping \\
+PiecewiseLinear & User-defined breakpoints \\
+Spline & Smooth spline interpolation \\
+Power & Power law transformation \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Backtesting}
+The \texttt{sigstrat.backtestEquityCash} function performs walk-forward simulation:
+\begin{itemize}[leftmargin=2em]
+  \item Configurable rebalancing frequency (daily, weekly, monthly)
+  \item Transaction cost modeling (basis points per trade)
+  \item Weight drift tracking between rebalance dates
+  \item Benchmark comparisons (60/40, 100\% equity)
+\end{itemize}
+
+\subsection{Stress Testing}
+The \texttt{sigstrat.stressTestStrategy} function evaluates performance during 6 historical crisis episodes:
+\begin{center}
+\begin{tabularx}{\textwidth}{l l X}
+\toprule
+\textbf{Episode} & \textbf{Period} & \textbf{Event} \\
+\midrule
+GFC & Oct 2007 -- Mar 2009 & Global Financial Crisis \\
+Euro Crisis & Jul 2011 -- Oct 2011 & European sovereign debt \\
+Taper Tantrum & May 2013 -- Sep 2013 & Fed taper announcement \\
+2018 Q4 & Oct 2018 -- Dec 2018 & Rate hike selloff \\
+COVID & Feb 2020 -- Mar 2020 & Pandemic crash \\
+Rate Shock & Jan 2022 -- Oct 2022 & Inflation and rate hiking cycle \\
+\bottomrule
+\end{tabularx}
+\end{center}
+\newpage
+\section{Signal Builder Dialog}
+
+\subsection{Overview}
+The \texttt{SignalBuilderDialog} is a modal UI launched from the Signal Strategy App for building individual custom signals interactively.
+
+\subsection{Workflow}
+\begin{enumerate}[leftmargin=2em]
+  \item Select signal type from the dropdown (6 types available)
+  \item Configure parameters in the dynamic panel (parameters change per type)
+  \item Enter a unique signal name
+  \item Click \textbf{Preview} to visualize the signal and inspect statistics
+  \item Click \textbf{Add Signal} to accept, or \textbf{Cancel} to discard
+\end{enumerate}
+
+\subsection{Signal Type Panels}
+Each signal type presents a tailored parameter panel:
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Momentum} --- Lookback, Min History, Vol Halflife, Skip Days, Vol Floor, Activation, Tanh Scale
+  \item \textbf{EWMAC} --- Fast Span, Slow Span, Vol Halflife, Vol Floor, Activation, Tanh Scale
+  \item \textbf{Ensemble} --- Lookbacks (comma-separated text), Method (Equal Weight / Risk Parity), Vol Halflife, Skip Days, Vol Floor, Activation, Tanh Scale
+  \item \textbf{MacroZ} --- Variable dropdown, Min Window, Negate checkbox, Tanh Scale
+  \item \textbf{MeanReversion} --- MA Lookback, Min History, Tanh Scale
+  \item \textbf{Composite} --- Editable table (Variable, Weight, Negate per row), Min Window, Tanh Scale
+\end{itemize}
+\newpage
+\section{Volatility Surface Utility}
+
+\subsection{Overview}
+The \texttt{GetVolSurface} function downloads SPY options, calibrates an SVI (Stochastic Volatility Inspired) surface, and queries implied volatility at any $(T, K)$ point.
+
+\subsection{Usage}
+\begin{lstlisting}
+%% Query IV at 3-month, 95% moneyness
+iv = GetVolSurface(0.25, 0.95, struct('Type','moneyness'));
+
+%% Query IV at 1-year, strike = 500
+iv = GetVolSurface(1.0, 500, struct('Type','strike'));
+
+%% Force refresh and plot 3D surface
+iv = GetVolSurface(0.5, 1.0, struct('Type','moneyness', ...
+    'Refresh',true, 'Plot',true));
+\end{lstlisting}
+
+\subsection{SVI Model}
+The SVI parameterization models total implied variance as a function of log-moneyness $k$:
+\begin{equation}
+w(k) = a + b\left(\rho(k - m) + \sqrt{(k - m)^2 + \sigma^2}\right)
+\end{equation}
+Parameters $(a, b, \rho, m, \sigma)$ are calibrated per expiry via least-squares fit to market quotes. The function uses persistent caching (\texttt{VolSurfaceCache.mat}) and a 24-hour refresh policy.
+\newpage
+\section{GAA Function Reference}
+
+\begin{longtable}{p{3.8cm} p{11.2cm}}
+\toprule
+\textbf{Function} & \textbf{Description} \\
+\midrule
+\endhead
+\texttt{gaaConfig} & Central configuration: asset universe (17 assets), tickers, FRED series, scenario definitions, optimization constraints, and method selections. Returns a struct used by all downstream functions. \\
+& {\small\texttt{cfg = gaa.gaaConfig()}} \\
+\midrule
+\texttt{downloadData} & Download daily prices from Stooq/Bloomberg/Datastream. Computes log returns, aligns dates across assets. Caches results for 24 hours. \\
+& {\small\texttt{[R, prices, dates, names] = gaa.downloadData(cfg)}} \\
+\midrule
+\texttt{downloadFRED} & Download 12 FRED series and compute 14 derived macro measures (VIX, yield slope, credit spreads, GDP/CPI growth, DXY, NFP, etc.). \\
+& {\small\texttt{macro = gaa.downloadFRED(cfg)}} \\
+\midrule
+\texttt{computeCMA} & Estimate Capital Market Assumptions: expected returns, volatilities, and covariance matrix via BuildingBlock, Historical, or BLEquilibrium methods. \\
+& {\small\texttt{cma = gaa.computeCMA(R, cfg, macro)}} \\
+\midrule
+\texttt{computeSAA} & Compute Strategic Asset Allocation via MinimaxRegret, ScenarioWeighted, MaxSharpe, MinVariance, or RiskParity. \\
+& {\small\texttt{saa = gaa.computeSAA(cma, cfg)}} \\
+\midrule
+\texttt{computeTacticalSignals} & Compute tactical signals from momentum, risk, and macro categories. Returns composite signal per asset in [-1,+1]. \\
+& {\small\texttt{signals = gaa.computeTacticalSignals(R, macro, cfg)}} \\
+\midrule
+\texttt{combineAllocations} & Blend SAA with tactical signals via Black-Litterman or linear overlay. Enforces tactical budget and per-asset deviation constraints. \\
+& {\small\texttt{alloc = gaa.combineAllocations(saa, signals, cma, cfg)}} \\
+\midrule
+\texttt{backtestStrategy} & Walk-forward historical backtest with rebalancing, transaction costs, turnover tracking, and SAA benchmark. \\
+& {\small\texttt{bt = gaa.backtestStrategy(alloc, R, cfg)}} \\
+\midrule
+\texttt{computePerformance} & Comprehensive performance analytics: annualized metrics, drawdown, rolling statistics, monthly returns, attribution. \\
+& {\small\texttt{perf = gaa.computePerformance(bt)}} \\
+\midrule
+\texttt{computeRiskDecomp} & Risk decomposition: MCR, CR, percentage contributions, HHI, ENB, and Diversification Ratio. \\
+& {\small\texttt{rd = gaa.computeRiskDecomp(w, Sigma)}} \\
+\midrule
+\texttt{optimizePortfolio} & Unified optimizer: MaxSharpe, MinVariance, RiskParity, MinCVaR, TargetVol, Resampled. Long-only and constrained. \\
+& {\small\texttt{w = gaa.optimizePortfolio(mu, Sigma, opts)}} \\
+\midrule
+\texttt{blackLitterman} & Black-Litterman posterior returns and covariance from views. \\
+& {\small\texttt{[muBL, SigBL] = gaa.blackLitterman(Sigma, wMkt, P, Q, opts)}} \\
+\midrule
+\texttt{robustCovariance} & Ledoit-Wolf shrinkage with optional Marcenko-Pastur eigenvalue denoising. \\
+& {\small\texttt{[S, info] = gaa.robustCovariance(R, opts)}} \\
+\midrule
+\texttt{ledoitWolfShrink} & Ledoit-Wolf (2004) shrinkage toward scaled identity. \\
+& {\small\texttt{[S, delta] = gaa.ledoitWolfShrink(R)}} \\
+\midrule
+\texttt{plotDashboard} & 6-panel dashboard: CMA bars, signal heatmap, allocation area, risk waterfall, cumulative performance, drawdown. \\
+& {\small\texttt{fig = gaa.plotDashboard(results)}} \\
+\midrule
+\texttt{generateReport} & LaTeX/PDF report generation with embedded dashboard figure. \\
+& {\small\texttt{gaa.generateReport(results)}} \\
+\bottomrule
+\end{longtable}
+\newpage
+\section{Signal Strategy Function Reference}
+
+\begin{longtable}{p{3.8cm} p{11.2cm}}
+\toprule
+\textbf{Function} & \textbf{Description} \\
+\midrule
+\endhead
+\texttt{downloadMarketData} & Download S\\&P 500 and T-Bill daily data from Stooq. Returns struct with dates, returns, and prices. 24h cache. \\
+& {\small\texttt{mkt = sigstrat.downloadMarketData()}} \\
+\midrule
+\texttt{downloadMacroData} & Download FRED macro series with 14 derived measures. Falls back to embedded pipeline if gaa.downloadFRED unavailable. \\
+& {\small\texttt{macro = sigstrat.downloadMacroData(dates)}} \\
+\midrule
+\texttt{generateDemoSignals} & Generate 5 demo signals: yield slope, VIX, credit spread, momentum, macro composite. \\
+& {\small\texttt{[data, names] = sigstrat.generateDemoSignals(macro, mkt)}} \\
+\midrule
+\texttt{generateExtendedSignals} & Generate 12 production signals across fast/medium/slow categories. Uses EWMA vol. \\
+& {\small\texttt{[data, names] = sigstrat.generateExtendedSignals(macro, mkt)}} \\
+\midrule
+\texttt{buildSignal} & Build custom signal: Momentum, EWMAC, Ensemble, MacroZ, MeanReversion, or Composite. \\
+& {\small\texttt{[sig, meta] = sigstrat.buildSignal(type, params, mkt, macro)}} \\
+\midrule
+\texttt{normalizeSignals} & Normalize signals to [-1,+1] via RobustZ, StandardZ, RollingZ, Percentile, or MinMax. \\
+& {\small\texttt{normed = sigstrat.normalizeSignals(data, method)}} \\
+\midrule
+\texttt{mapSignalToWeight} & Map signal [-1,+1] to equity weight [0,1] via Step, Linear, Sigmoid, Piecewise, Spline, or Power. \\
+& {\small\texttt{w = sigstrat.mapSignalToWeight(sig, method, opts)}} \\
+\midrule
+\texttt{backtestEquityCash} & Walk-forward equity/cash backtest with rebalancing, costs, and benchmark comparisons. \\
+& {\small\texttt{bt = sigstrat.backtestEquityCash(w, mkt, opts)}} \\
+\midrule
+\texttt{computeStrategyPerf} & Performance metrics for strategy, 60/40, and 100\\% equity. Rolling analytics and monthly heatmap. \\
+& {\small\texttt{perf = sigstrat.computeStrategyPerf(bt)}} \\
+\midrule
+\texttt{stressTestStrategy} & Evaluate strategy during 6 historical crisis episodes. \\
+& {\small\texttt{st = sigstrat.stressTestStrategy(bt)}} \\
+\midrule
+\texttt{optimizeComposite} & Mode 1: grid-search optimal weights and thresholds for composite signal strategy. \\
+& {\small\texttt{res = sigstrat.optimizeComposite(signals, mkt, opts)}} \\
+\midrule
+\texttt{riskBudgetStrategy} & Mode 2: per-signal risk budget allocation with configurable translation functions. \\
+& {\small\texttt{res = sigstrat.riskBudgetStrategy(signals, mkt, opts)}} \\
+\midrule
+\texttt{robustOptimize} & K-fold CV robust optimization with L2 regularization and turnover penalty. \\
+& {\small\texttt{res = sigstrat.robustOptimize(signals, mkt, opts)}} \\
+\midrule
+\texttt{decisionTreeStrategy} & Mode 3: rule-based or CART auto-optimized decision tree for weight prediction. \\
+& {\small\texttt{res = sigstrat.decisionTreeStrategy(signals, mkt, opts)}} \\
+\bottomrule
+\end{longtable}
+\newpage
+\section{Data Structures Reference}
+
+\subsection{Market Data (\texttt{mkt} struct)}
+\begin{center}
+\begin{tabularx}{\textwidth}{l l X}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{dates} & datetime & Price dates \\
+\texttt{retDates} & datetime & Return dates (\texttt{dates(2:end)}) \\
+\texttt{spxRet} & Tx1 double & Daily S\&P 500 log returns \\
+\texttt{cashRet} & Tx1 double & Daily T-Bill returns \\
+\texttt{spxPrice} & Tx1 double & S\&P 500 price level \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Macro Data (\texttt{macro} table)}
+A MATLAB table with \texttt{Date} column plus derived measures:
+\begin{multicols}{3}
+\begin{itemize}[leftmargin=1em,itemsep=0pt]
+  \item VIX
+  \item FedFunds
+  \item TenYr
+  \item TwoYr
+  \item YieldSlope
+  \item HY\_Spread
+  \item IG\_Spread
+  \item GDP\_YoY
+  \item CPI\_YoY
+  \item CPI\_MoM
+  \item RetailSales\_YoY
+  \item IndProd\_YoY
+  \item NFP\_MoM
+  \item DXY\_3m
+\end{itemize}
+\end{multicols}
+
+\subsection{CMA Struct}
+\begin{center}
+\begin{tabularx}{\textwidth}{l l X}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{mu} & Nx1 & Expected annualized returns \\
+\texttt{vol} & Nx1 & Expected annualized volatilities \\
+\texttt{Sigma} & NxN & Covariance matrix \\
+\texttt{Corr} & NxN & Correlation matrix \\
+\texttt{method} & char & Method used (BuildingBlock, Historical, BLEquilibrium) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Performance Struct}
+\begin{center}
+\begin{tabularx}{\textwidth}{l l X}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{annReturn} & scalar & Annualized return \\
+\texttt{annVol} & scalar & Annualized volatility \\
+\texttt{sharpe} & scalar & Sharpe ratio \\
+\texttt{sortino} & scalar & Sortino ratio \\
+\texttt{calmar} & scalar & Calmar ratio (return / max drawdown) \\
+\texttt{maxDD} & scalar & Maximum drawdown \\
+\texttt{hitRate} & scalar & Fraction of positive return days \\
+\texttt{skew} & scalar & Return skewness \\
+\texttt{kurt} & scalar & Return kurtosis \\
+\bottomrule
+\end{tabularx}
+\end{center}
+\newpage
+\section{Testing}
+
+\subsection{Test Suites}
+Two test suites validate the framework:
+
+\subsubsection{GAA End-to-End Test (\texttt{testGAA\_synthetic.m})}
+Uses synthetic data (10 years, 17 assets, 3-factor correlation structure) to test every module in the GAA pipeline without requiring internet access. Validates:
+\begin{itemize}[leftmargin=2em]
+  \item Data download and alignment
+  \item CMA computation (all 3 methods)
+  \item SAA optimization (all 5 methods)
+  \item Tactical signal generation
+  \item Allocation blending
+  \item Backtest execution
+  \item Performance computation
+\end{itemize}
+
+\subsubsection{Momentum Upgrades Test (\texttt{test\_momentum\_upgrades.m})}
+Unit tests for the enhanced momentum signal system. 12 test cases covering:
+\begin{itemize}[leftmargin=2em]
+  \item Momentum default parameters and valid output range
+  \item EWMA vol produces different signals with different halflife values
+  \item SkipDays produces shifted signals
+  \item All 3 activation functions produce valid $[-1,+1]$ output
+  \item EWMAC with default and custom spans
+  \item Ensemble with equal-weight and risk-parity methods
+  \item Vol floor prevents extreme values
+  \item Extended signals produce $T \times 12$ output
+  \item Backward compatibility of MacroZ
+\end{itemize}
+
+\subsection{Running Tests}
+\begin{lstlisting}
+%% Run all tests
+runtests('testGAA_synthetic');
+runtests('test_momentum_upgrades');
+
+%% Run with verbose output
+results = runtests('test_momentum_upgrades', 'Verbosity', 3);
+disp(results);
+\end{lstlisting}
+\newpage
+\section{Caching and Data Management}
+
+\subsection{Data Caching}
+All data download functions implement a 24-hour disk cache to minimize API calls:
+\begin{center}
+\begin{tabularx}{\textwidth}{l l X}
+\toprule
+\textbf{Module} & \textbf{Cache Location} & \textbf{Contents} \\
+\midrule
+\texttt{gaa.downloadData} & \texttt{tempdir/gaa\_cache/} & Market prices, returns, dates \\
+\texttt{gaa.downloadFRED} & \texttt{tempdir/gaa\_cache/} & FRED macro series \\
+\texttt{sigstrat.downloadMarketData} & \texttt{tempdir/sigstrat\_cache/} & S\&P 500, T-Bill data \\
+\texttt{GetVolSurface} & \texttt{VolSurfaceCache.mat} & SVI parameters per expiry \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+To force a data refresh, delete the cache directory or pass the \texttt{Refresh} option where available.
+
+\subsection{Output Directory}
+The GAA module writes reports and figures to \texttt{gaa\_output/}:
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{GAA\_Report.pdf} --- Auto-generated \LaTeX/PDF strategy report
+  \item Dashboard PNG exports
+\end{itemize}
+\newpage
+\section{Academic References}
+
+The signal construction and portfolio methodology draws on the following research:
+\begin{itemize}[leftmargin=2em]
+  \item Moskowitz, T., Ooi, Y.H., \& Pedersen, L.H. (2012). ``Time series momentum.' \textit{Journal of Financial Economics}, 104(2), 228--250.
+  \item Baltas, N. \& Kosowski, R. (2013/2020). ``Momentum strategies in futures markets and trend-following funds.' Working paper / \textit{Journal of Finance and Data Science}.
+  \item Levine, A. \& Pedersen, L.H. (2016). ``Which trend is your friend?' \textit{Financial Analysts Journal}, 72(3), 51--66.
+  \item Dao, T.-L., Nguyen, T.-T., Deremble, C., Lem\'erle, Y., Bouchaud, J.-P., \& Potters, M. (2021). ``Tail protection for long investors: Trend convexity at work.' Working paper.
+  \item Novy-Marx, R. (2012). ``Is momentum really momentum?' \textit{Journal of Financial Economics}, 103(3), 429--453.
+  \item Black, F. \& Litterman, R. (1992). ``Global portfolio optimization.' \textit{Financial Analysts Journal}, 48(5), 28--43.
+  \item Ledoit, O. \& Wolf, M. (2004). ``A well-conditioned estimator for large-dimensional covariance matrices.' \textit{Journal of Multivariate Analysis}, 88(2), 365--411.
+  \item Michaud, R.O. (1998). \textit{Efficient Asset Management}. Harvard Business School Press.
+  \item Carver, R. (2015). \textit{Systematic Trading}. Harriman House.
+  \item Gatheral, J. (2004). ``A parsimonious arbitrage-free implied volatility parameterization with application to the valuation of volatility derivatives.' Presentation, Global Derivatives.
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,905 @@
+\documentclass[11pt, a4paper]{article}
+
+%% ── Packages ──────────────────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{booktabs, longtable, array, multirow}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{parskip}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{caption}
+
+%% ── Colours ───────────────────────────────────────────────────────────────
+\definecolor{cblue}{RGB}{25,  115, 217}
+\definecolor{cgray}{RGB}{90,  90,  90}
+\definecolor{cred} {RGB}{200, 50,  50}
+\definecolor{cgreen}{RGB}{30, 140, 60}
+\definecolor{clightgray}{RGB}{245,245,245}
+\definecolor{codegray}{RGB}{100,100,100}
+
+%% ── Listings (MATLAB) ─────────────────────────────────────────────────────
+\lstdefinestyle{matlab}{
+  backgroundcolor=\color{clightgray},
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{cblue}\bfseries,
+  commentstyle=\color{codegray}\itshape,
+  stringstyle=\color{cgreen},
+  breaklines=true,
+  captionpos=b,
+  frame=single,
+  framesep=4pt,
+  numbers=none,
+  tabsize=4,
+  morekeywords={function,end,for,if,else,elseif,while,try,catch,
+                arguments,timetable,table,datetime,true,false,NaN,Inf},
+}
+\lstset{style=matlab}
+
+%% ── Headers / footers ─────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small\textcolor{cgray}{Two-Step Equity Underweight Strategy}}
+\rhead{\small\textcolor{cgray}{\thepage}}
+\renewcommand{\headrulewidth}{0.4pt}
+
+%% ── Hyperref ──────────────────────────────────────────────────────────────
+\hypersetup{
+  colorlinks=true,
+  linkcolor=cblue,
+  urlcolor=cblue,
+  citecolor=cblue,
+  pdftitle={Two-Step Equity Underweight Strategy: Technical Documentation},
+  pdfauthor={CIO Quantitative Research},
+}
+
+%% ── Title ─────────────────────────────────────────────────────────────────
+\title{%
+  \vspace{-1cm}
+  {\Large\bfseries Two-Step Equity Underweight Strategy}\\[0.4em]
+  {\large Technical Model Documentation}\\[0.8em]
+  {\normalsize\textcolor{cgray}{Version 1.0 \textbar{} CIO Quantitative Research}}
+}
+\author{}
+\date{\today}
+
+%% ══════════════════════════════════════════════════════════════════════════
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+\vspace{-1em}
+\noindent\rule{\linewidth}{0.8pt}
+
+%% ── Abstract ──────────────────────────────────────────────────────────────
+\begin{abstract}
+\noindent
+This document provides a complete technical description of the Two-Step Equity
+Underweight Strategy. The model monitors four macro and market signals
+(payrolls momentum, yield-curve slope, HY credit spreads, and equity price
+trend) and dynamically reduces equity allocation from a neutral \textbf{50\%}
+to a mild-underweight \textbf{35\%} or severe-underweight \textbf{20\%}
+when the composite signal falls below calibrated thresholds.
+
+Over the full backtested period (December 1996 -- November 2025, 29 years),
+the strategy delivered an annualised return of \textbf{8.14\%} at
+\textbf{5.87\%} annualised volatility, versus 7.97\% at 15.38\% for a fully
+invested equity position and 6.04\% at 6.79\% for a matched-exposure passive
+benchmark. The maximum drawdown was reduced from $-52.6\%$ (100\% equities)
+to $-10.7\%$, with an annualised Sharpe ratio of \textbf{1.39}.
+\end{abstract}
+
+\noindent\rule{\linewidth}{0.4pt}
+\tableofcontents
+\clearpage
+
+%% ══════════════════════════════════════════════════════════════════════════
+\section{Strategy Overview}
+\label{sec:overview}
+%% ══════════════════════════════════════════════════════════════════════════
+
+The strategy is a rules-based, signal-driven overlay applied to a static
+mixed portfolio. The neutral allocation ($w_N = 50\%$ equity, $50\%$
+investment-grade bonds) is maintained unless the composite market signal
+crosses a calibrated threshold, at which point equity is reduced and the
+freed allocation is placed in USD cash.
+
+\subsection{Allocation States}
+
+\begin{table}[H]
+\centering
+\caption{Allocation states and portfolio composition}
+\label{tab:alloc-states}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{State} & \textbf{Trigger Condition} & \textbf{Equity} & \textbf{Bonds} & \textbf{Cash} \\
+\midrule
+Neutral   & $M_t > \theta_m$                           & 50\% & 50\% & 0\%  \\
+Mild UW   & $\theta_s < M_t \leq \theta_m$             & 35\% & 50\% & 15\% \\
+Severe UW & $M_t \leq \theta_s$                        & 20\% & 50\% & 30\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+where $M_t$ denotes the \emph{Market Composite} signal (Section~\ref{sec:mktcomp})
+and $(\theta_m, \theta_s)$ are the mild and severe signal thresholds
+(Section~\ref{sec:threshold}). The bond allocation is held constant at 50\%
+across all states. The de-risked equity portion earns the prevailing Federal
+Funds target rate.
+
+\subsection{Pipeline Architecture}
+
+The MATLAB implementation follows a strict
+Model--View--Controller (MVC) architecture using MATLAB packages:
+
+\begin{description}[leftmargin=3em, labelindent=1em]
+  \item[\texttt{+Model/}] Signal generation, data access, backtesting logic.
+  \item[\texttt{+View/}]  GUI application (\texttt{UnderweightApp}).
+  \item[\texttt{+Controller/}] Orchestration (\texttt{UnderweightController}).
+  \item[\texttt{Underweight/}] Strategy scripts and helper functions.
+\end{description}
+
+The core execution pipeline is:
+\[
+  \text{buildSignals} \;\longrightarrow\; \text{labelEquityRegimes}
+  \;\longrightarrow\; \text{thresholdApproach}
+  \;\longrightarrow\; \text{evalPortfolio}
+\]
+
+%% ══════════════════════════════════════════════════════════════════════════
+\section{Data Sources}
+\label{sec:data}
+%% ══════════════════════════════════════════════════════════════════════════
+
+\begin{table}[H]
+\centering
+\caption{Data sources used in the strategy}
+\label{tab:data-sources}
+\begin{tabular}{llll}
+\toprule
+\textbf{Series} & \textbf{Provider} & \textbf{Frequency} & \textbf{Available from} \\
+\midrule
+S\&P 500 Index (\texttt{\^{}SPX}) & Stooq & Daily OHLCV   & January 1928 \\
+PAYEMS (Nonfarm Payrolls)    & FRED  & Monthly (SA)  & January 1939 \\
+T10Y2Y (10Y$-$2Y Spread)     & FRED  & Daily (\%)    & June 1976 \\
+BAMLH0A0HYM2 (HY OAS)        & FRED  & Daily (\%)    & December 1996 \\
+FEDFUNDS (Effective FFR)     & FRED  & Monthly (\%)  & July 1954 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All data is fetched via the \texttt{Model.DataManager} class, which
+maintains an on-disk SQLite registry and \texttt{.mat} cache. Incremental
+updates are performed automatically: a fresh request with no \texttt{startDate}
+only downloads observations newer than the last cached date.
+
+The equity price priority chain is:
+Yahoo Finance (rate-limited) $\rightarrow$ Stooq SPY (data from 2005)
+$\rightarrow$ Stooq \texttt{\^{}SPX} (data from 1994). The fallback to
+\texttt{\^{}SPX} is triggered if the fetched history is shorter than 25 years
+($252 \times 25$ trading days).
+
+The effective backtest start date is constrained by BAMLH0A0HYM2
+(December 1996), though data is fetched from January 1994 to provide a
+60-month warm-up for rolling z-score calculations.
+
+%% ══════════════════════════════════════════════════════════════════════════
+\section{Signal Construction}
+\label{sec:signals}
+%% ══════════════════════════════════════════════════════════════════════════
+
+Each signal maps to the interval $(-1, +1)$ with the convention:
+\[
+  s_t > 0 \;\Leftrightarrow\; \textit{risk-on}, \qquad
+  s_t < 0 \;\Leftrightarrow\; \textit{risk-off}.
+\]
+
+Monthly signal values are obtained by taking the last non-NaN observation
+within each calendar month (end-of-month resampling).
+
+%% ── 3.1 Payrolls Momentum ────────────────────────────────────────────────
+\subsection{Payrolls Momentum (\texttt{PayrollsMom})}
+\label{sec:payrolls}
+
+\textbf{Source:} FRED PAYEMS (Total Nonfarm Payrolls, thousands, monthly SA).
+
+The signal is constructed via a five-step pipeline that provides a noise-robust,
+adaptive momentum indicator for the US labour market.
+
+\paragraph{Step 1 — Raw month-over-month change}
+\[
+  \Delta P_t = P_t - P_{t-1}
+\]
+
+\paragraph{Step 2 — Trailing median prefilter (noise gate)}
+\[
+  \widetilde{\Delta P}_t = \operatorname{median}\!\bigl(\Delta P_{t-W+1},\,\ldots,\,\Delta P_t\bigr),
+  \quad W = 3
+\]
+A single anomalous print (weather event, strike, seasonal revision) moves the
+trailing median of three to the middle value, effectively replacing the outlier
+with a neighbour. Two or more consecutive prints in the same direction pass
+through unchanged, preserving genuine labour-market inflections with at most
+one month of additional lag.
+
+\paragraph{Step 3 — Exponential moving average (numerator path)}
+\[
+  M_t = \alpha\,\widetilde{\Delta P}_t + (1-\alpha)\,M_{t-1},
+  \quad \alpha = 1 - e^{-\ln 2\,/\,h},\quad h = 3\ \text{months}
+\]
+
+\paragraph{Step 4 — Expanding-window winsorisation (denominator path)}
+\[
+  Q_t = \operatorname{quantile}\bigl(|\Delta P_1|,\ldots,|\Delta P_t|;\,p=95\bigr),
+  \qquad
+  \widehat{\Delta P}_t = \operatorname{sign}(\Delta P_t)\cdot\min\!\bigl(|\Delta P_t|, Q_t\bigr)
+\]
+This prevents catastrophic single-month shocks (e.g.\ $-$20{,}700~K in April
+2020 due to COVID-19) from inflating the rolling standard deviation and
+suppressing the signal for subsequent years.
+
+\paragraph{Step 5 — Adaptive normalisation and tanh compression}
+\[
+  \sigma_t = \operatorname{std}\!\bigl(\widehat{\Delta P}_{t-N+1},\ldots,\widehat{\Delta P}_t\bigr),
+  \quad N = 60
+\]
+\[
+  \boxed{s_t^{\text{Pay}} = \tanh\!\left(\frac{M_t}{\sigma_t}\right) \in (-1,+1)}
+\]
+
+\textit{Calibration:} Under default parameters, a sustained expansion
+($+200$~K/month) gives $s_t \approx +0.80$; a mild recession ($-100$~K/month)
+gives $s_t \approx -0.59$; an isolated shock is filtered to $\approx 0$.
+
+%% ── 3.2 Yield Curve Slope ────────────────────────────────────────────────
+\subsection{Yield Curve Slope (\texttt{YieldCurve})}
+\label{sec:yield}
+
+\textbf{Source:} FRED T10Y2Y (10-Year minus 2-Year Treasury Constant Maturity
+Rate, daily, percentage points).
+
+\paragraph{Step 1 — Raw spread}
+$S_t$ = T10Y2Y level (percentage points). Positive = normal (risk-on);
+negative = inverted (risk-off).
+
+\paragraph{Step 2 — Causal rolling z-score}
+\[
+  z_t = \frac{S_t - \mu_t}{\sigma_t},
+  \quad
+  \mu_t = \operatorname{mean}(S_{t-W_d+1},\ldots,S_t),
+  \quad
+  \sigma_t = \operatorname{std}(S_{t-W_d+1},\ldots,S_t)
+\]
+where $W_d = W \times 21$ trading days, $W = 60$ months. A steep curve above
+its historical average yields $z > 0$; an inverted curve below its average
+yields $z < 0$.
+
+\paragraph{Step 3 — EMA smoothing}
+\[
+  m_t = \alpha\, z_t + (1-\alpha)\, m_{t-1},
+  \quad \alpha = 1 - e^{-\ln 2\,/\,h},\quad h = 3\ \text{months}
+\]
+
+\paragraph{Step 4 — Tanh compression}
+\[
+  \boxed{s_t^{\text{YC}} = \tanh(m_t) \in (-1,+1)}
+\]
+
+%% ── 3.3 Credit Spread Signal ─────────────────────────────────────────────
+\subsection{Credit Spread Signal (\texttt{CreditSpread})}
+\label{sec:credit}
+
+\textbf{Source:} FRED BAMLH0A0HYM2 (ICE BofA US High Yield Index
+Option-Adjusted Spread, daily, \%).
+
+The signal is \emph{inverted}: wide spreads indicate credit stress and
+produce a negative (risk-off) output.
+
+\paragraph{Step 1 — Raw OAS}
+$C_t$ = daily HY OAS level (\%).
+
+\paragraph{Step 2 — Expanding-window winsorisation (denominator path)}
+\[
+  Q_t = \operatorname{quantile}(C_1,\ldots,C_t;\;p=97),
+  \quad \hat{C}_t = \min(C_t, Q_t)
+\]
+This caps the denominator series against extreme spike events (GFC 2008:
+$\approx 20\%$; COVID 2020: $\approx 11\%$) that would otherwise inflate
+$\sigma_t$ and flatten the signal for years.
+
+\paragraph{Step 3 — Causal rolling z-score}
+\[
+  z_t = \frac{C_t - \mu_t(\hat{C})}{\sigma_t(\hat{C})},
+  \quad W = 60\ \text{months}
+\]
+
+\paragraph{Step 4 — EMA smoothing}
+\[
+  m_t = \alpha\, z_t + (1-\alpha)\, m_{t-1},
+  \quad \alpha = 1 - e^{-\ln 2\,/\,h},\quad h = 1\ \text{month}
+\]
+
+\paragraph{Step 5 — Tanh compression, inverted}
+\[
+  \boxed{s_t^{\text{CS}} = \tanh(-m_t) \in (-1,+1)}
+\]
+
+The short EMA half-life ($h = 1$) ensures the signal reacts immediately to
+credit market blowouts, which are typically fast-moving and highly predictive
+of equity drawdowns.
+
+%% ── 3.4 Equity Trend Signal ──────────────────────────────────────────────
+\subsection{Equity Trend Signal (\texttt{EquityTrend})}
+\label{sec:trend}
+
+\textbf{Source:} S\&P 500 daily close price $P_t$ (Stooq \texttt{\^{}SPX}).
+
+\paragraph{Step 1 — Trailing moving average}
+\[
+  \operatorname{MA}_t = \frac{1}{N}\sum_{i=0}^{N-1} P_{t-i},
+  \quad N = 200\ \text{days}
+\]
+NaN is assigned for the first $N-1$ observations (warm-up period).
+
+\paragraph{Step 2 — Tanh-compressed deviation}
+\[
+  \boxed{s_t^{\text{ET}} = \tanh\!\left(k\,\Bigl(\frac{P_t}{\operatorname{MA}_t} - 1\Bigr)\right) \in (-1,+1),
+  \quad k = 10}
+\]
+
+\textit{Calibration:} 10\% above the 200-day MA gives
+$\tanh(10 \times 0.10) = \tanh(1) \approx 0.76$; 10\% below gives $\approx -0.76$.
+The scale $k = 10$ provides a graded signal rather than a hard step function.
+
+%% ── 3.5 Equal-Weighted Composite ─────────────────────────────────────────
+\subsection{Equal-Weighted Composite (\texttt{Composite})}
+\label{sec:composite}
+
+\[
+  \boxed{C_t = \frac{1}{n_t}\sum_{i \in \mathcal{S}} s_{i,t},
+  \quad n_t = \bigl|\{i \in \mathcal{S} : s_{i,t} \neq \text{NaN}\}\bigr|}
+\]
+
+where $\mathcal{S} = \{\text{PayrollsMom},\,\text{YieldCurve},\,\text{CreditSpread},\,\text{EquityTrend}\}$.
+The NaN-tolerant averaging ensures the composite is defined even during the
+MA warm-up period and any data gaps.
+
+%% ── 3.6 Market Composite ──────────────────────────────────────────────────
+\subsection{Market Composite (\texttt{MarketComposite})}
+\label{sec:mktcomp}
+
+A weighted composite that over-weights the two market-price signals
+(CreditSpread and EquityTrend) relative to the macro signal (YieldCurve):
+
+\[
+  \boxed{M_t = \frac{w_{\text{CS}}\,s_t^{\text{CS}}
+              + w_{\text{ET}}\,s_t^{\text{ET}}
+              + w_{\text{YC}}\,s_t^{\text{YC}}}
+             {\sum_{i} w_i \cdot \mathbf{1}[s_{i,t} \neq \text{NaN}]}}
+\]
+
+\begin{table}[H]
+\centering
+\caption{MarketComposite signal weights}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Component} & \textbf{Series} & \textbf{Weight} \\
+\midrule
+Credit Spread & BAMLH0A0HYM2 & 30\% \\
+Equity Trend  & S\&P 500 vs 200d MA & 50\% \\
+Yield Curve   & T10Y2Y & 20\% \\
+\midrule
+\textbf{Total} & & \textbf{100\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The denominator re-normalises to the sum of \emph{available} weights,
+so the composite remains well-defined if any component is NaN.
+PayrollsMom is excluded from MarketComposite because its monthly frequency
+and lagged publication make it redundant relative to the higher-frequency
+market-price signals.
+
+\subsection{Monthly Resampling}
+\label{sec:resample}
+
+All daily signals are resampled to a common monthly end-of-month grid:
+\[
+  s_{\text{month}} = \text{last non-NaN observation in calendar month}
+\]
+The grid is anchored to the latest start month across all four series
+(December 1996, constrained by BAMLH0A0HYM2) and extends to the most
+recent complete month. A year$\times$100\,+\,month integer key is used
+for timezone-agnostic month matching.
+
+%% ══════════════════════════════════════════════════════════════════════════
+\section{Regime Classification}
+\label{sec:labels}
+%% ══════════════════════════════════════════════════════════════════════════
+
+Forward-looking regime labels are assigned at each month $t$ based on the
+subsequent three months of equity returns and realised volatility. These
+labels are used \emph{only} for threshold calibration and decision-tree
+training; they are never used in live signal generation.
+
+Let $r_{t+k}^{\text{eq}}$ denote the equity log-return for month $t+k$.
+Define the 3-month forward cumulative return and annualised realised
+volatility:
+\[
+  R_t^{3m} = \prod_{k=1}^{3}\bigl(1 + r_{t+k}^{\text{eq}}\bigr) - 1,
+  \qquad
+  \sigma_t^{3m} = \operatorname{std}\bigl(r_{t+1}^{\text{eq}},\,r_{t+2}^{\text{eq}},\,r_{t+3}^{\text{eq}}\bigr)\times\sqrt{12}
+\]
+
+The label assigned to month $t$ is:
+\[
+  \ell_t =
+  \begin{cases}
+    2 & \text{(Severe UW)} \quad \text{if } R_t^{3m} < 0 \;\text{ and }\; \sigma_t^{3m} > 30\% \\
+    1 & \text{(Mild UW)}   \quad \text{if } R_t^{3m} < 0 \;\text{ and }\; \sigma_t^{3m} \leq 30\% \\
+    0 & \text{(Neutral)}   \quad \text{otherwise} \\
+    \text{NaN} & \text{if fewer than 3 forward months available}
+  \end{cases}
+\]
+
+The intuition is that high-volatility negative-return periods are the
+most destructive for long-term portfolio compounding and justify the
+most aggressive underweighting (Severe). Low-volatility negative-return
+periods (Mild) justify a moderate reduction.
+
+\subsection{Sample Distribution}
+
+Over the backtested period (December 1996 -- November 2025, 348 labelled months):
+
+\begin{table}[H]
+\centering
+\caption{Regime label distribution}
+\label{tab:labels}
+\begin{tabular}{lrrl}
+\toprule
+\textbf{Regime} & \textbf{Months} & \textbf{\%} & \textbf{Allocation} \\
+\midrule
+Neutral         & 242 & 69.5\% & 50\% equity \\
+Mild UW         &  87 & 25.0\% & 35\% equity \\
+Severe UW       &  19 &  5.5\% & 20\% equity \\
+\midrule
+\textbf{Total}  & 348 & 100\%  & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The severe class represents only 5.5\% of observations, corresponding
+primarily to the GFC (2008--2009), COVID crash (2020), and the 2022 rate-hike
+bear market.
+
+%% ══════════════════════════════════════════════════════════════════════════
+\section{Signal Threshold Optimisation}
+\label{sec:threshold}
+%% ══════════════════════════════════════════════════════════════════════════
+
+\subsection{Methodology}
+
+For each signal or composite $s_t$, the threshold pair
+$(\hat{\theta}_m, \hat{\theta}_s)$ is found by exhaustive grid search:
+
+\[
+  (\hat{\theta}_m, \hat{\theta}_s) = \arg\max_{\theta_s \leq \theta_m}
+  \operatorname{BalAcc}\!\bigl(a(s, \theta_m, \theta_s),\, \ell\bigr)
+\]
+
+where the predicted allocation $a_t$ maps to a label via:
+\[
+  \hat{\ell}_t(\theta_m, \theta_s) =
+  \begin{cases}
+    2 & s_t \leq \theta_s \\
+    1 & \theta_s < s_t \leq \theta_m \\
+    0 & s_t > \theta_m
+  \end{cases}
+\]
+
+and balanced accuracy is the mean per-class recall:
+\[
+  \operatorname{BalAcc} = \frac{1}{3}\left(
+    \frac{\mathrm{TP}_0}{|\ell=0|} +
+    \frac{\mathrm{TP}_1}{|\ell=1|} +
+    \frac{\mathrm{TP}_2}{|\ell=2|}
+  \right)
+\]
+
+Balanced accuracy is used (rather than overall accuracy) to account for
+the severe class imbalance: a na\"{i}ve classifier that always predicts
+Neutral achieves 69.5\% overall accuracy but BalAcc of only 0.333.
+
+The threshold grids used are:
+\[
+  \Theta_m \in \{-0.9, -0.8, \ldots, +0.9\},\quad
+  \Theta_s \in \{-0.9, -0.8, \ldots, +0.9\}
+\]
+with the constraint $\theta_s \leq \theta_m$, giving approximately 171 valid
+$(\theta_m, \theta_s)$ pairs per signal.
+
+\subsection{Results}
+
+\begin{table}[H]
+\centering
+\caption{Optimised thresholds and balanced accuracy by signal variant}
+\label{tab:thresholds}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Signal}       & \textbf{Mild thr} $\hat{\theta}_m$ & \textbf{Severe thr} $\hat{\theta}_s$ & \textbf{BalAcc} & \textbf{Avg Alloc} \\
+\midrule
+PayrollsMom      & $-0.10$ & $-0.30$ & 0.498 & 45.9\% \\
+YieldCurve       & $+0.10$ & $-0.80$ & 0.261 & 35.4\% \\
+CreditSpread     & $-0.50$ & $-0.60$ & 0.469 & 41.2\% \\
+EquityTrend      & $+0.10$ & $-0.40$ & 0.510 & 43.1\% \\
+Composite        & $0.00$  & $-0.20$ & 0.499 & 43.9\% \\
+MacroComposite   & $0.00$  & $-0.30$ & 0.489 & 45.1\% \\
+\textbf{MarketComposite} & $\mathbf{-0.20}$ & $\mathbf{-0.40}$ & \textbf{0.492} & \textbf{44.1\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The YieldCurve signal achieves the lowest balanced accuracy (0.261) because
+the yield curve is a slow-moving structural indicator; it leads equity
+drawdowns by 12--18 months on average, making near-term classification
+difficult. The EquityTrend signal achieves the highest individual BalAcc
+(0.510), reflecting the reflexive relationship between price momentum and
+regime.
+
+The \textbf{MarketComposite} is selected as the primary signal for live
+allocation because it:
+\begin{enumerate}[leftmargin=2em]
+  \item Combines both market-price signals (which lead on a 1--3 month horizon)
+        with the macro yield signal (which provides leading information on
+        recessions);
+  \item Achieves a competitive BalAcc of 0.492 at an average equity exposure
+        of 44.1\%;
+  \item Is robust to parameter perturbation given that its components react
+        on different timescales.
+\end{enumerate}
+
+%% ══════════════════════════════════════════════════════════════════════════
+\section{Decision Tree Approach}
+\label{sec:tree}
+%% ══════════════════════════════════════════════════════════════════════════
+
+As a secondary allocation method, a shallow classification tree
+is trained on all four signal features to predict the regime label.
+This approach allows non-linear interaction between signals without
+requiring explicit composite construction.
+
+\subsection{Model Specification}
+
+\begin{description}[leftmargin=3em]
+  \item[Algorithm] CART (\texttt{fitctree}, Statistics and Machine Learning
+        Toolbox).
+  \item[Features] $\mathbf{x}_t = [s_t^{\text{Pay}},\, s_t^{\text{YC}},\,
+        s_t^{\text{CS}},\, s_t^{\text{ET}}]^\top$.
+  \item[Target] Regime label $\ell_t \in \{0, 1, 2\}$.
+  \item[Max splits] 4 (constrains tree to at most 5 leaves for interpretability).
+  \item[Cost matrix] Asymmetric: misclassifying Severe as Neutral costs 5;
+        misclassifying Mild as Neutral costs 2; symmetric otherwise. This
+        penalises failure to de-risk during true stress regimes.
+  \item[Validation] 5-fold stratified cross-validation.
+\end{description}
+
+\subsection{Trained Tree Rules}
+
+The tree trained on the full December 1996 -- November 2025 sample yields
+the following rules:
+
+\begin{enumerate}[leftmargin=2em]
+  \item If $s_t^{\text{Pay}} < -0.318$ and $s_t^{\text{ET}} < -0.396$
+        $\Rightarrow$ \textbf{Severe UW} (20\% equity)
+  \item If $s_t^{\text{Pay}} < -0.318$ and $s_t^{\text{ET}} \geq -0.396$
+        $\Rightarrow$ \textbf{Neutral} (50\% equity)
+  \item If $s_t^{\text{Pay}} \geq -0.318$ and $s_t^{\text{YC}} < -0.953$
+        $\Rightarrow$ \textbf{Mild UW} (35\% equity)
+  \item If $s_t^{\text{Pay}} \geq -0.318$ and $s_t^{\text{YC}} \geq -0.953$
+        $\Rightarrow$ \textbf{Neutral} (50\% equity)
+\end{enumerate}
+
+\textit{Economic interpretation:} Severe underweighting requires simultaneous
+deterioration in \emph{both} labour markets (PayrollsMom below $-0.318$)
+\emph{and} equity price momentum (EquityTrend below $-0.396$). Mild
+underweighting is triggered by a deeply inverted yield curve alone
+(YieldCurve below $-0.953$), consistent with yield-curve inversion as an
+intermediate-horizon recession signal.
+
+\subsection{Performance}
+
+\begin{table}[H]
+\centering
+\caption{Decision tree classification performance}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+In-sample balanced accuracy    & 0.552 \\
+5-fold CV balanced accuracy    & 0.391 \\
+\midrule
+\multicolumn{2}{l}{\textit{Confusion matrix (rows = actual, cols = predicted):}} \\
+\midrule
+Neutral correctly classified   & 232 / 242 \\
+Mild correctly classified      &  10 / 87  \\
+Severe correctly classified    &  11 / 19  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The CV accuracy of 0.391 vs.\ in-sample 0.552 indicates moderate overfitting,
+primarily from the under-represented Severe class (19 observations). The tree
+is offered as a supplemental tool; the \emph{threshold approach} on
+MarketComposite is the primary allocation engine.
+
+%% ══════════════════════════════════════════════════════════════════════════
+\section{Portfolio Construction and Evaluation}
+\label{sec:portfolio}
+%% ══════════════════════════════════════════════════════════════════════════
+
+\subsection{Return Calculation}
+
+At each month $t$ in the valid labelled subset, the strategy portfolio
+return is:
+\[
+  r_t^{\text{port}} = a_t\, r_t^{\text{eq}}
+                    + w_B\, r^{\text{bond}}
+                    + (w_B - a_t)\, r_t^{\text{cash}}
+\]
+where:
+\begin{itemize}[leftmargin=2em]
+  \item $a_t \in \{0.20, 0.35, 0.50\}$ = signal-implied equity allocation;
+  \item $w_B = 0.50$ = constant bond weight;
+  \item $r^{\text{bond}} = (1 + 0.04)^{1/12} - 1 \approx 0.327\%$/month = assumed 4\%~p.a.;
+  \item $r_t^{\text{cash}} = (1 + \text{FEDFUNDS}_t)^{1/12} - 1$ = monthly USD cash return
+        from FRED FEDFUNDS (monthly average effective FFR).
+\end{itemize}
+
+Note that $w_B - a_t \geq 0$ for all valid states (since $a_t \leq w_B = 0.50$),
+so the total portfolio weight always sums to 1.00:
+\[
+  a_t + w_B + (w_B - a_t) = a_t + 0.50 + 0.50 - a_t = 1.00\quad\checkmark
+\]
+
+Portfolio returns at NaN (warm-up) months are treated as zero.
+
+\subsection{Benchmark Comparison}
+
+Three strategies are compared:
+
+\begin{description}[leftmargin=3em]
+  \item[100\% Equities] $r_t = r_t^{\text{eq}}$. No risk management; full
+        equity exposure throughout.
+  \item[Matched Benchmark] $r_t = \bar{a}\, r_t^{\text{eq}} + (1-\bar{a})\,
+        r^{\text{bond}}$, where $\bar{a} = 44.1\%$ is the time-average equity
+        allocation of the Two-Step strategy. No timing; purely passive at the
+        same long-run equity exposure.
+  \item[Two-Step De-Risk] The signal-driven strategy as described above.
+\end{description}
+
+The Matched Benchmark is the economically appropriate comparator because
+it eliminates the size effect: both strategies hold the same \emph{average}
+equity position over time. Any excess return of the Two-Step strategy above
+the Matched Benchmark is attributable purely to the timing ability of the
+MarketComposite signal.
+
+\subsection{Performance Metrics}
+
+\begin{align}
+  \hat{r}_{\text{ann}} &= \left(\prod_{t=1}^{T}(1+r_t)\right)^{12/T} - 1
+  && \text{(annualised geometric return)} \\[4pt]
+  \hat{\sigma}_{\text{ann}} &= \hat{\sigma}_m \sqrt{12}
+  && \text{(annualised volatility)} \\[4pt]
+  SR &= \hat{r}_{\text{ann}} / \hat{\sigma}_{\text{ann}}
+  && \text{(annualised Sharpe ratio)} \\[4pt]
+  \text{MDD} &= \min_{t}\frac{V_t - \max_{s \leq t} V_s}{\max_{s \leq t} V_s}
+  && \text{(maximum peak-to-trough drawdown)}
+\end{align}
+
+%% ══════════════════════════════════════════════════════════════════════════
+\section{Empirical Results}
+\label{sec:results}
+%% ══════════════════════════════════════════════════════════════════════════
+
+\subsection{Sample and Allocation Statistics}
+
+\begin{table}[H]
+\centering
+\caption{Allocation state dwell statistics (December 1996 -- November 2025)}
+\label{tab:dwell}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{State} & \textbf{Months} & \textbf{\%} & \textbf{Avg dwell} & \textbf{No. episodes} \\
+\midrule
+Neutral (50\%)    & 264 & 75.9\% & 20.3 months & 13 \\
+Mild UW (35\%)    &  32 &  9.2\% &  1.6 months &  9 \\
+Severe UW (20\%)  &  52 & 14.9\% &  3.5 months & 11 \\
+\midrule
+\textbf{Total}    & 348 & 100\%  & & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The strategy makes on average \textbf{1.62 allocation changes per year},
+with the portfolio spending 75.9\% of the time at the neutral 50\%
+allocation. The average Neutral dwell of 20.3 months reflects the strategy's
+patience: it does not churn in and out at minor signal fluctuations.
+
+\subsection{Performance Summary}
+
+\begin{table}[H]
+\centering
+\caption{29-year backtest performance (December 1996 -- November 2025)}
+\label{tab:perf}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Strategy} & \textbf{Return p.a.} & \textbf{Vol p.a.} & \textbf{Max DD} & \textbf{Sharpe} & \textbf{Avg Eq} \\
+\midrule
+100\% Equities                & 7.97\% & 15.38\% & $-52.6\%$ & 0.52 & 100.0\% \\
+Matched Benchmark (44\% eq)   & 6.04\% &  6.79\% & $-25.1\%$ & 0.89 &  44.1\% \\
+\textbf{Two-Step De-Risk + Cash} & \textbf{8.14\%} & \textbf{5.87\%} & $\mathbf{-10.7\%}$ & \textbf{1.39} & \textbf{44.1\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+\textbf{Bond rate assumption:} 4.0\% p.a.\ (constant) on the 50\% bond allocation.\\
+\textbf{Cash rate:} FRED FEDFUNDS; average over the sample period: \textbf{2.35\% p.a.}
+
+\subsection{Key Observations}
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Return enhancement:} The Two-Step strategy outperforms both
+        100\% Equities (+17 bps p.a.) and the Matched Benchmark (+210 bps
+        p.a.). The entire excess return over the Matched Benchmark is
+        attributable to the timing skill of the MarketComposite signal,
+        since both run at identical average equity exposure (44.1\%).
+
+  \item \textbf{Volatility reduction:} Strategy volatility (5.87\%) is
+        $62\%$ lower than 100\% Equities (15.38\%) and $14\%$ lower than
+        the already de-risked Matched Benchmark (6.79\%). This arises from
+        the strategy being underweight equity during high-volatility stress
+        episodes.
+
+  \item \textbf{Drawdown control:} The maximum drawdown of $-10.7\%$
+        represents a reduction of $80\%$ relative to 100\% Equities
+        ($-52.6\%$) and $57\%$ relative to the Matched Benchmark ($-25.1\%$).
+
+  \item \textbf{Sharpe ratio:} The annualised Sharpe of \textbf{1.39}
+        compares favourably with 0.89 (Matched Benchmark) and 0.52
+        (100\% Equities), demonstrating that the timing signal generates
+        positive risk-adjusted alpha.
+
+  \item \textbf{Structural bond allocation:} By holding a constant 50\%
+        in bonds, the strategy benefits from bond/equity diversification
+        at all times, not just during risk-off episodes. The incremental
+        cash position during underweighting additionally reduces
+        mark-to-market risk in rising-rate environments.
+\end{enumerate}
+
+%% ══════════════════════════════════════════════════════════════════════════
+\section{Parameter Reference}
+\label{sec:params}
+%% ══════════════════════════════════════════════════════════════════════════
+
+\begin{longtable}{p{4.5cm} r p{7.5cm}}
+\caption{Complete model parameter reference}\label{tab:params}\\
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Description} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Description} \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{\small(continued on next page)}\\
+\endfoot
+\bottomrule
+\endlastfoot
+
+\multicolumn{3}{l}{\textit{Data parameters}} \\
+\texttt{EquityTicker}       & SPY / \texttt{\^{}SPX} & Equity ticker; fallback chain to \texttt{\^{}SPX} \\
+\texttt{StartDate}          & 1994-01-01 & Data fetch start (BAMLH0A0HYM2 from 1996; pre-start used for warm-up) \\
+\midrule
+\multicolumn{3}{l}{\textit{Label thresholds}} \\
+\texttt{SevereRetThresh}    & 0 & 3m fwd return below this \% qualifies for Severe \\
+\texttt{SevereVolThresh}    & 0.30 & 3m fwd ann vol above this qualifies for Severe \\
+\texttt{MildRetThresh}      & 0 & 3m fwd return below this \% qualifies for Mild \\
+\midrule
+\multicolumn{3}{l}{\textit{Allocation weights}} \\
+\texttt{BaseWeight}         & 0.50 & Neutral equity allocation \\
+\texttt{MildWeight}         & 0.35 & Mild underweight equity allocation \\
+\texttt{SevereWeight}       & 0.20 & Severe underweight equity allocation \\
+\midrule
+\multicolumn{3}{l}{\textit{EquityTrend signal}} \\
+\texttt{MAWindow}           & 200 (days) & Trailing price moving-average window \\
+\texttt{TrendScale}         & 10 & tanh scale $k$; 10 $\to$ 10\% above MA $\approx$ 0.76 \\
+\midrule
+\multicolumn{3}{l}{\textit{PayrollsMom signal}} \\
+\texttt{PrefilterWindow}    & 3 (months) & Trailing median noise-gate window \\
+\texttt{SmoothHalfLife}     & 3 (months) & EMA half-life for numerator path \\
+\texttt{NormWindow}         & 60 (months) & Rolling std window for denominator \\
+\texttt{WinsorPct}          & 95 & Expanding winsorisation percentile (denominator) \\
+\midrule
+\multicolumn{3}{l}{\textit{YieldCurve signal}} \\
+\texttt{ZScoreWindow}       & 60 (months) & Trailing z-score window \\
+\texttt{SmoothHalfLife}     & 3 (months) & EMA half-life \\
+\texttt{TanhScale}          & 1.0 & tanh scale \\
+\midrule
+\multicolumn{3}{l}{\textit{CreditSpread signal}} \\
+\texttt{ZScoreWindow}       & 60 (months) & Trailing z-score window \\
+\texttt{SmoothHalfLife}     & 1 (month) & EMA half-life (fast reaction to blowouts) \\
+\texttt{TanhScale}          & 1.0 & tanh scale (applied inverted) \\
+\texttt{WinsorPct}          & 97 & Expanding winsorisation percentile (denominator) \\
+\midrule
+\multicolumn{3}{l}{\textit{MarketComposite weights}} \\
+\texttt{w\_CreditSpread}    & 0.30 & Weight on CreditSpread component \\
+\texttt{w\_EquityTrend}     & 0.50 & Weight on EquityTrend component \\
+\texttt{w\_YieldCurve}      & 0.20 & Weight on YieldCurve component \\
+\midrule
+\multicolumn{3}{l}{\textit{Decision tree}} \\
+\texttt{TreeMaxSplits}      & 4 & Maximum tree depth ($\to$ 5 leaves) \\
+\texttt{CostSevere}         & 5 & Misclassification cost: Severe predicted as Neutral \\
+\texttt{CostMild}           & 2 & Misclassification cost: Mild predicted as Neutral \\
+\midrule
+\multicolumn{3}{l}{\textit{Portfolio evaluation}} \\
+\texttt{BondAnnReturn}      & 0.04 & Assumed constant annual bond return (50\% allocation) \\
+\textit{Cash rate}          & FEDFUNDS & FRED effective Federal Funds rate (monthly average) \\
+
+\end{longtable}
+
+%% ══════════════════════════════════════════════════════════════════════════
+\section*{Implementation Notes}
+\label{sec:impl}
+\addcontentsline{toc}{section}{Implementation Notes}
+%% ══════════════════════════════════════════════════════════════════════════
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{No-timezone datetimes:} Monthly grids use timezone-free
+        MATLAB \texttt{datetime} to avoid \texttt{synchronize()} timezone
+        conflicts between FRED, Stooq, and Yahoo data.
+
+  \item \textbf{Integer month-matching:} Year$\times$100\,+\,month integer
+        keys are used for all monthly alignment operations, providing
+        unambiguous month matching across sources with different timestamp
+        conventions.
+
+  \item \textbf{Cache system:} \texttt{Model.DataManager} maintains an
+        SQLite registry (\texttt{cache/cache\_registry.db}) and per-series
+        \texttt{.mat} files. Incremental fetches avoid full re-downloads;
+        a fresh request with explicit \texttt{startDate} bypasses the cache
+        and fetches the full requested range.
+
+  \item \textbf{UIAxes compatibility:} All chart helpers use \texttt{ax}
+        as the first argument and call \texttt{hold(ax,'on')} rather than
+        \texttt{axes(ax)}, which is required for MATLAB App Designer
+        \texttt{UIAxes} objects.
+
+  \item \textbf{Decision tree availability:} The decision tree approach
+        requires the Statistics and Machine Learning Toolbox. If the
+        toolbox is absent, \texttt{decisionTreeApproach} raises an error
+        that the controller catches gracefully, continuing with threshold
+        results only.
+\end{enumerate}
+
+%% ── Footer ────────────────────────────────────────────────────────────────
+\vfill
+\noindent\rule{\linewidth}{0.4pt}
+\begin{center}
+\small\textcolor{cgray}{%
+  CIO Quantitative Research \textbar{} Generated \today \textbar{}
+  Backtest period: December 1996 -- November 2025 (29 years) \textbar{}
+  Source data: FRED / Stooq
+}
+\end{center}
+
+\end{document}
