@@ -1,0 +1,34 @@
+> how do i run it with extra data?                                                                                                                  
+● Here's the pattern from the plan, adapted for copy-paste:
+
+  % --- Setup (same as before) ---                                                                                                                    cd('C:\CIO\ClaudeCode\SignalBuilder')
+  dm = Model.DataManager(); dm.init();                                                                                                                features = buildSignals(dm, 'SPY', StartDate='1994-01-01');
+  labels   = labelEquityRegimes(dm, 'SPY', StartDate='1994-01-01');
+
+  % --- Append extra signals ---
+  features2 = appendSignal(features, 'UNRATE', dm, Invert=true,  ZScoreWindow=60);
+  features2 = appendSignal(features2, 'UMCSENT', dm, Invert=true, ZScoreWindow=36);  % consumer sentiment
+
+  % --- Baseline (original 4 signals, honest OOS) ---
+  r1 = decisionTreeApproach(features, labels, WalkForward=true);
+
+  % --- Expanded (original 4 + UNRATE) ---
+  r2 = decisionTreeApproach(features2, labels, ...
+      PredictorCols=["PayrollsMom","YieldCurve","CreditSpread","EquityTrend","UNRATE"], ...
+      WalkForward=true);
+
+  % --- Compare ---
+  fprintf('Baseline  WF OOS: %.3f\n', r1.WalkForwardBalAcc);
+  fprintf('+ UNRATE  WF OOS: %.3f\n', r2.WalkForwardBalAcc);
+
+  A few notes:
+
+  - appendSignal can be chained — each call returns the timetable with the column added, so you can keep piping features2 = appendSignal(features2,
+  ...) for each new series.
+  - Any FRED series ID works as columnName (e.g. 'UNRATE', 'UMCSENT', 'INDPRO', 'HOUST'). The column name in the timetable will be
+  matlab.lang.makeValidName(...) of that ID — usually the same string.
+  - Invert=true flips the signal so that "bad" readings (rising unemployment, falling sentiment) → negative (risk-off). Omit it for series where
+  high values are already risk-on.
+  - WalkForward=true with the default WalkForwardMinTrain=120 means the first 10 years of data are used to seed the first OOS prediction. If your
+  sample is shorter than ~130 months after label alignment, bump it down: WalkForwardMinTrain=60.
+  - The PredictorCols list must explicitly include every column you want — the default is still the original 4.
