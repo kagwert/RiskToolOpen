@@ -1,0 +1,47 @@
+\contentsline {section}{\numberline {1}Strategy Overview}{3}{section.1}%
+\contentsline {subsection}{\numberline {1.1}Allocation States}{3}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}Pipeline Architecture}{3}{subsection.1.2}%
+\contentsline {section}{\numberline {2}Data Sources}{3}{section.2}%
+\contentsline {section}{\numberline {3}Signal Construction}{4}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Payrolls Momentum (\texttt {PayrollsMom})}{4}{subsection.3.1}%
+\contentsline {paragraph}{Step 1 — Raw month-over-month change}{4}{subsection.3.1}%
+\contentsline {paragraph}{Step 2 — Trailing median prefilter (noise gate)}{4}{subsection.3.1}%
+\contentsline {paragraph}{Step 3 — Exponential moving average (numerator path)}{4}{subsection.3.1}%
+\contentsline {paragraph}{Step 4 — Expanding-window winsorisation (denominator path)}{4}{subsection.3.1}%
+\contentsline {paragraph}{Step 5 — Adaptive normalisation and tanh compression}{4}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Yield Curve Slope (\texttt {YieldCurve})}{5}{subsection.3.2}%
+\contentsline {paragraph}{Step 1 — Raw spread}{5}{subsection.3.2}%
+\contentsline {paragraph}{Step 2 — Causal rolling z-score}{5}{subsection.3.2}%
+\contentsline {paragraph}{Step 3 — EMA smoothing}{5}{subsection.3.2}%
+\contentsline {paragraph}{Step 4 — Tanh compression}{5}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Credit Spread Signal (\texttt {CreditSpread})}{5}{subsection.3.3}%
+\contentsline {paragraph}{Step 1 — Raw OAS}{5}{subsection.3.3}%
+\contentsline {paragraph}{Step 2 — Expanding-window winsorisation (denominator path)}{5}{subsection.3.3}%
+\contentsline {paragraph}{Step 3 — Causal rolling z-score}{5}{subsection.3.3}%
+\contentsline {paragraph}{Step 4 — EMA smoothing}{5}{subsection.3.3}%
+\contentsline {paragraph}{Step 5 — Tanh compression, inverted}{5}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Equity Trend Signal (\texttt {EquityTrend})}{6}{subsection.3.4}%
+\contentsline {paragraph}{Step 1 — Trailing moving average}{6}{subsection.3.4}%
+\contentsline {paragraph}{Step 2 — Tanh-compressed deviation}{6}{subsection.3.4}%
+\contentsline {subsection}{\numberline {3.5}Equal-Weighted Composite (\texttt {Composite})}{6}{subsection.3.5}%
+\contentsline {subsection}{\numberline {3.6}Market Composite (\texttt {MarketComposite})}{6}{subsection.3.6}%
+\contentsline {subsection}{\numberline {3.7}Monthly Resampling}{7}{subsection.3.7}%
+\contentsline {section}{\numberline {4}Regime Classification}{7}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Sample Distribution}{7}{subsection.4.1}%
+\contentsline {section}{\numberline {5}Signal Threshold Optimisation}{8}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Methodology}{8}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Results}{8}{subsection.5.2}%
+\contentsline {section}{\numberline {6}Decision Tree Approach}{9}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Model Specification}{9}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Trained Tree Rules}{9}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Performance}{9}{subsection.6.3}%
+\contentsline {section}{\numberline {7}Portfolio Construction and Evaluation}{10}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Return Calculation}{10}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Benchmark Comparison}{10}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}Performance Metrics}{10}{subsection.7.3}%
+\contentsline {section}{\numberline {8}Empirical Results}{11}{section.8}%
+\contentsline {subsection}{\numberline {8.1}Sample and Allocation Statistics}{11}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}Performance Summary}{11}{subsection.8.2}%
+\contentsline {subsection}{\numberline {8.3}Key Observations}{11}{subsection.8.3}%
+\contentsline {section}{\numberline {9}Parameter Reference}{12}{section.9}%
+\contentsline {section}{Implementation Notes}{13}{table.9}%

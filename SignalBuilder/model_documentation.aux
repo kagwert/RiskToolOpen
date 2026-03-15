@@ -1,0 +1,90 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Strategy Overview}{3}{section.1}\protected@file@percent }
+\newlabel{sec:overview}{{1}{3}{Strategy Overview}{section.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Allocation States}{3}{subsection.1.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Allocation states and portfolio composition}}{3}{table.caption.1}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{tab:alloc-states}{{1}{3}{Allocation states and portfolio composition}{table.caption.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Pipeline Architecture}{3}{subsection.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Data Sources}{3}{section.2}\protected@file@percent }
+\newlabel{sec:data}{{2}{3}{Data Sources}{section.2}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Data sources used in the strategy}}{3}{table.caption.2}\protected@file@percent }
+\newlabel{tab:data-sources}{{2}{3}{Data sources used in the strategy}{table.caption.2}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {3}Signal Construction}{4}{section.3}\protected@file@percent }
+\newlabel{sec:signals}{{3}{4}{Signal Construction}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Payrolls Momentum (\texttt  {PayrollsMom})}{4}{subsection.3.1}\protected@file@percent }
+\newlabel{sec:payrolls}{{3.1}{4}{Payrolls Momentum (\texttt {PayrollsMom})}{subsection.3.1}{}}
+\@writefile{toc}{\contentsline {paragraph}{Step 1 — Raw month-over-month change}{4}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 2 — Trailing median prefilter (noise gate)}{4}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 3 — Exponential moving average (numerator path)}{4}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 4 — Expanding-window winsorisation (denominator path)}{4}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 5 — Adaptive normalisation and tanh compression}{4}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Yield Curve Slope (\texttt  {YieldCurve})}{5}{subsection.3.2}\protected@file@percent }
+\newlabel{sec:yield}{{3.2}{5}{Yield Curve Slope (\texttt {YieldCurve})}{subsection.3.2}{}}
+\@writefile{toc}{\contentsline {paragraph}{Step 1 — Raw spread}{5}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 2 — Causal rolling z-score}{5}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 3 — EMA smoothing}{5}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 4 — Tanh compression}{5}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Credit Spread Signal (\texttt  {CreditSpread})}{5}{subsection.3.3}\protected@file@percent }
+\newlabel{sec:credit}{{3.3}{5}{Credit Spread Signal (\texttt {CreditSpread})}{subsection.3.3}{}}
+\@writefile{toc}{\contentsline {paragraph}{Step 1 — Raw OAS}{5}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 2 — Expanding-window winsorisation (denominator path)}{5}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 3 — Causal rolling z-score}{5}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 4 — EMA smoothing}{5}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 5 — Tanh compression, inverted}{5}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Equity Trend Signal (\texttt  {EquityTrend})}{6}{subsection.3.4}\protected@file@percent }
+\newlabel{sec:trend}{{3.4}{6}{Equity Trend Signal (\texttt {EquityTrend})}{subsection.3.4}{}}
+\@writefile{toc}{\contentsline {paragraph}{Step 1 — Trailing moving average}{6}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 2 — Tanh-compressed deviation}{6}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Equal-Weighted Composite (\texttt  {Composite})}{6}{subsection.3.5}\protected@file@percent }
+\newlabel{sec:composite}{{3.5}{6}{Equal-Weighted Composite (\texttt {Composite})}{subsection.3.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Market Composite (\texttt  {MarketComposite})}{6}{subsection.3.6}\protected@file@percent }
+\newlabel{sec:mktcomp}{{3.6}{6}{Market Composite (\texttt {MarketComposite})}{subsection.3.6}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces MarketComposite signal weights}}{6}{table.caption.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}Monthly Resampling}{7}{subsection.3.7}\protected@file@percent }
+\newlabel{sec:resample}{{3.7}{7}{Monthly Resampling}{subsection.3.7}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Regime Classification}{7}{section.4}\protected@file@percent }
+\newlabel{sec:labels}{{4}{7}{Regime Classification}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Sample Distribution}{7}{subsection.4.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Regime label distribution}}{7}{table.caption.4}\protected@file@percent }
+\newlabel{tab:labels}{{4}{7}{Regime label distribution}{table.caption.4}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Signal Threshold Optimisation}{8}{section.5}\protected@file@percent }
+\newlabel{sec:threshold}{{5}{8}{Signal Threshold Optimisation}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Methodology}{8}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Results}{8}{subsection.5.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Optimised thresholds and balanced accuracy by signal variant}}{8}{table.caption.5}\protected@file@percent }
+\newlabel{tab:thresholds}{{5}{8}{Optimised thresholds and balanced accuracy by signal variant}{table.caption.5}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Decision Tree Approach}{9}{section.6}\protected@file@percent }
+\newlabel{sec:tree}{{6}{9}{Decision Tree Approach}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Model Specification}{9}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Trained Tree Rules}{9}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Performance}{9}{subsection.6.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Decision tree classification performance}}{9}{table.caption.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Portfolio Construction and Evaluation}{10}{section.7}\protected@file@percent }
+\newlabel{sec:portfolio}{{7}{10}{Portfolio Construction and Evaluation}{section.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Return Calculation}{10}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Benchmark Comparison}{10}{subsection.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Performance Metrics}{10}{subsection.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Empirical Results}{11}{section.8}\protected@file@percent }
+\newlabel{sec:results}{{8}{11}{Empirical Results}{section.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Sample and Allocation Statistics}{11}{subsection.8.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Allocation state dwell statistics (December 1996 -- November 2025)}}{11}{table.caption.7}\protected@file@percent }
+\newlabel{tab:dwell}{{7}{11}{Allocation state dwell statistics (December 1996 -- November 2025)}{table.caption.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Performance Summary}{11}{subsection.8.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces 29-year backtest performance (December 1996 -- November 2025)}}{11}{table.caption.8}\protected@file@percent }
+\newlabel{tab:perf}{{8}{11}{29-year backtest performance (December 1996 -- November 2025)}{table.caption.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Key Observations}{11}{subsection.8.3}\protected@file@percent }
+\gdef \LT@i {\LT@entry 
+    {1}{140.0374pt}\LT@entry 
+    {5}{72.98596pt}\LT@entry 
+    {1}{225.39566pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {9}Parameter Reference}{12}{section.9}\protected@file@percent }
+\newlabel{sec:params}{{9}{12}{Parameter Reference}{section.9}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Complete model parameter reference}}{12}{table.9}\protected@file@percent }
+\newlabel{tab:params}{{9}{12}{Complete model parameter reference}{table.9}{}}
+\newlabel{sec:impl}{{9}{13}{}{table.9}{}}
+\@writefile{toc}{\contentsline {section}{Implementation Notes}{13}{table.9}\protected@file@percent }
+\gdef \@abspage@last{13}

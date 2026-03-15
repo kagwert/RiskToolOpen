@@ -275,61 +275,109 @@ view(dtree.Tree, 'Mode', 'graph');
 %% ========================================================================
 %  9. Composite relative performance chart + summary statistics
 %     Three strategies:
-%       (A) 100% Equities   – always fully invested, no risk management
-%       (B) Benchmark 50/50 – constant 50% equity / 50% bonds
-%       (C) Two-Step De-Risk – MarketComposite signal; steps down to 35%
-%                              (mild) and 20% (severe) based on signals
+%       (A) 100% Equities      – always fully invested, no risk management
+%       (B) Matched Benchmark  – static equity at same avg alloc as Two-Step
+%                               (no timing; purely passive at average weight)
+%       (C) Two-Step De-Risk   – MarketComposite; 50% bonds always allocated;
+%                               de-risked equity portion earns USD cash rate
+%         Neutral (50% eq): 50% eq + 50% bonds + 0% cash
+%         Mild    (35% eq): 35% eq + 50% bonds + 15% cash
+%         Severe  (20% eq): 20% eq + 50% bonds + 30% cash
 %  ========================================================================
 
+% --- Fetch FEDFUNDS (USD effective cash rate) and align to valid months ---
+cashMonthRet_v = repmat((1+p.BondAnnReturn)^(1/12)-1, sum(validMask), 1);
+avgCashAnn     = p.BondAnnReturn * 100;
+try
+    tt_fed   = dm.fetch_fred('FEDFUNDS', p.StartDate);
+    fedYM    = year(tt_fed.Time)*100 + month(tt_fed.Time);
+    fedRates = tt_fed.FEDFUNDS / 100;   % percent → decimal annual rate
+    validYM  = year(T)*100 + month(T);
+    cashAnn_v = nan(numel(T), 1);
+    for k = 1 : numel(T)
+        idx = find(fedYM == validYM(k), 1, 'last');
+        if ~isempty(idx); cashAnn_v(k) = fedRates(idx); end
+    end
+    % Forward-fill gaps (rate changes are infrequent)
+    for k = 2 : numel(cashAnn_v)
+        if isnan(cashAnn_v(k)); cashAnn_v(k) = cashAnn_v(k-1); end
+    end
+    cashAnn_v(isnan(cashAnn_v)) = p.BondAnnReturn;   % fill any leading NaN
+    cashMonthRet_v = (1 + cashAnn_v).^(1/12) - 1;
+    avgCashAnn     = mean(cashAnn_v) * 100;
+catch ME_fed
+    warning('runUnderweightStrategy:fedfunds', ...
+        'Could not fetch FEDFUNDS (%s). Using %.0f%% p.a. fallback.', ...
+        ME_fed.message, p.BondAnnReturn*100);
+end
+
+% --- Allocation vectors (all sized to sum(validMask)) ---
 alloc_100eq = ones(sum(validMask), 1);
-alloc_bench = repmat(p.BaseWeight, sum(validMask), 1);
 alloc_2step = thresh.MarketComposite.BestAlloc;
+avgEqAlloc  = mean(alloc_2step, 'omitnan');
+alloc_match = repmat(avgEqAlloc, sum(validMask), 1);
 
-stratLabels = {'100% Equities', 'Benchmark (50/50)', 'Two-Step De-Risk'};
-allocList   = {alloc_100eq, alloc_bench, alloc_2step};
-nStrat      = 3;
-colours     = {[0.85, 0.20, 0.20], [0.30, 0.30, 0.30], [0.10, 0.45, 0.85]};
-lineStyles  = {'--', ':', '-'};
+% --- Portfolio returns ---
+% Two-Step: constant 50% bonds; reduced equity shift earns FEDFUNDS cash rate
+portRet_2step = alloc_2step  .* eqRet_v ...
+              + p.BaseWeight .* bondMonthRet ...
+              + (p.BaseWeight - alloc_2step) .* cashMonthRet_v;
 
-% Compute equity curves and metrics for each strategy
-stratCurves = cell(nStrat, 1);
-sm          = struct('AnnReturn', 0, 'AnnVol', 0, 'MaxDrawdown', 0, ...
-                     'SharpeRatio', 0, 'AvgEquityAlloc', 0);
+% Matched Benchmark: avgEqAlloc in equity, remainder in bonds (no timing)
+portRet_match = alloc_match .* eqRet_v + (1 - alloc_match) .* bondMonthRet;
+
+% 100% Equities
+portRet_100eq = eqRet_v;
+
+% NaN warm-up periods → 0 return
+portRet_2step(isnan(portRet_2step)) = 0;
+portRet_match(isnan(portRet_match)) = 0;
+portRet_100eq(isnan(portRet_100eq)) = 0;
+
+stratPortRet = {portRet_100eq, portRet_match, portRet_2step};
+stratCurves  = cellfun(@(r) cumprod(1 + r), stratPortRet, 'UniformOutput', false);
+stratLabels  = {'100% Equities', ...
+                sprintf('Matched Benchmark (%.0f%% eq)', avgEqAlloc*100), ...
+                'Two-Step De-Risk + Cash'};
+allocList    = {alloc_100eq, alloc_match, alloc_2step};
+colours      = {[0.85, 0.20, 0.20], [0.30, 0.30, 0.30], [0.10, 0.45, 0.85]};
+lineStyles   = {'--', ':', '-'};
+nStrat       = 3;
+
+% --- Performance metrics ---
+sm = struct('AnnReturn',0,'AnnVol',0,'MaxDrawdown',0,'SharpeRatio',0,'AvgEquityAlloc',0);
 stratMetrics = repmat(sm, nStrat, 1);
-
 for s = 1 : nStrat
-    alloc_s   = allocList{s};
-    portRet_s = alloc_s .* eqRet_v + (1 - alloc_s) .* bondMonthRet;
-    portRet_s(isnan(portRet_s)) = 0;
-    eq_s = cumprod(1 + portRet_s);
-    stratCurves{s} = eq_s;
-
-    yrs_s = numel(portRet_s) / 12;
-    stratMetrics(s).AnnReturn      = (eq_s(end))^(1/yrs_s) - 1;
-    stratMetrics(s).AnnVol         = std(portRet_s, 'omitnan') * sqrt(12);
-    running_s = cummax(eq_s);
-    stratMetrics(s).MaxDrawdown    = min((eq_s - running_s) ./ running_s);
+    r   = stratPortRet{s};
+    eq  = stratCurves{s};
+    yrs = numel(r) / 12;
+    stratMetrics(s).AnnReturn      = eq(end)^(1/yrs) - 1;
+    stratMetrics(s).AnnVol         = std(r, 'omitnan') * sqrt(12);
+    running_s = cummax(eq);
+    stratMetrics(s).MaxDrawdown    = min((eq - running_s) ./ running_s);
     stratMetrics(s).SharpeRatio    = stratMetrics(s).AnnReturn / ...
                                      max(stratMetrics(s).AnnVol, eps);
-    stratMetrics(s).AvgEquityAlloc = mean(alloc_s, 'omitnan');
+    stratMetrics(s).AvgEquityAlloc = mean(allocList{s}, 'omitnan');
 end
 
 % ---- Print summary table ----
 nYrs = numel(T) / 12;
 fprintf('\n=== Composite Performance Summary (%d-year backtest, %s to %s) ===\n', ...
     round(nYrs), datestr(T(1),'mmm-yyyy'), datestr(T(end),'mmm-yyyy'));
-fprintf('%-20s  %11s  %8s  %12s  %8s  %11s\n', ...
+fprintf('%-36s  %11s  %8s  %12s  %8s  %11s\n', ...
     'Strategy', 'Return p.a.', 'Vol p.a.', 'Max Drawdown', 'Sharpe', 'Avg Eq Alloc');
-fprintf('%s\n', repmat('-', 1, 78));
+fprintf('%s\n', repmat('-', 1, 98));
 for s = 1 : nStrat
     m = stratMetrics(s);
-    fprintf('%-20s  %10.2f%%  %7.2f%%  %11.2f%%  %8.2f  %10.1f%%\n', ...
+    fprintf('%-36s  %10.2f%%  %7.2f%%  %11.2f%%  %8.2f  %10.1f%%\n', ...
         stratLabels{s}, m.AnnReturn*100, m.AnnVol*100, ...
         m.MaxDrawdown*100, m.SharpeRatio, m.AvgEquityAlloc*100);
 end
-fprintf('%s\n', repmat('-', 1, 78));
-fprintf('Non-equity portion earns %.0f%% p.a. (bonds/cash assumption)\n', ...
-    p.BondAnnReturn * 100);
+fprintf('%s\n', repmat('-', 1, 98));
+fprintf('Bond rate : %.0f%% p.a. (%.0f%% of portfolio, constant)\n', ...
+    p.BondAnnReturn*100, p.BaseWeight*100);
+fprintf('Cash rate : avg %.2f%% p.a. (FRED FEDFUNDS; de-risked equity portion only)\n', ...
+    avgCashAnn);
 
 % ---- Figure 5: Composite relative performance ----
 figure('Name', 'Underweight Strategy — Composite Relative Performance', ...
@@ -349,20 +397,20 @@ title(ax_abs, sprintf('Cumulative Performance — %s to %s', ...
 legend(ax_abs, 'Location', 'northwest');
 set(ax_abs, 'XGrid', 'on', 'YGrid', 'on');
 
-% Bottom panel: Cumulative relative performance vs 100% equities
+% Bottom panel: Relative performance vs Matched Benchmark
 ax_rel = subplot(2, 1, 2);
 runUW_shadeRegimes(ax_rel, T, lbl_v, cNeutral, cMild, cSevere);
 hold on
-for s = 2 : nStrat   % benchmark and two-step vs 100% equity baseline
-    relPerf = (stratCurves{s} ./ stratCurves{1} - 1) .* 100;
+for s = [1, 3]   % 100% Equities and Two-Step vs Matched Benchmark
+    relPerf = (stratCurves{s} ./ stratCurves{2} - 1) .* 100;
     plot(ax_rel, T, relPerf, lineStyles{s}, ...
         'Color', colours{s}, 'LineWidth', 2.0, ...
-        'DisplayName', [stratLabels{s} ' vs 100% Equities']);
+        'DisplayName', [stratLabels{s} ' vs Matched Benchmark']);
 end
-yline(ax_rel, 0, 'Color', [0.5 0.5 0.5], 'LineWidth', 0.8, ...
-    'HandleVisibility', 'off');
+yline(ax_rel, 0, 'Color', [0.5 0.5 0.5], 'LineWidth', 0.8, 'HandleVisibility', 'off');
 ylabel(ax_rel, 'Relative Performance (%)');
-title(ax_rel, 'Relative Performance vs 100% Equities (positive = outperformance)');
+matchLabel = sprintf('Matched Benchmark (%.0f%% eq, constant)', avgEqAlloc*100);
+title(ax_rel, ['Relative Performance vs ' matchLabel ' (positive = outperformance)']);
 legend(ax_rel, 'Location', 'best');
 set(ax_rel, 'XGrid', 'on', 'YGrid', 'on');
 
