@@ -146,13 +146,15 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
         CustomTickerField   matlab.ui.control.EditField
         AddTickerButton     matlab.ui.control.Button
         StatusLabel         matlab.ui.control.Label
+        ProjectNameField    matlab.ui.control.EditField
 
         % Market data download
-        DownloadDataButton  matlab.ui.control.Button
-        BloombergButton     matlab.ui.control.Button
-        DatastreamButton    matlab.ui.control.Button
-        StartDateField      matlab.ui.control.EditField
-        EndDateField        matlab.ui.control.EditField
+        DownloadDataButton     matlab.ui.control.Button
+        BloombergButton        matlab.ui.control.Button
+        BloombergMacroButton   matlab.ui.control.Button
+        DatastreamButton       matlab.ui.control.Button
+        StartDateField         matlab.ui.control.EditField
+        EndDateField           matlab.ui.control.EditField
         DownloadMeasuresButton matlab.ui.control.Button
 
         % Correlation tab
@@ -225,6 +227,7 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
 
         Freq char = 'Daily'
         DataType char = 'Prices'
+        ProjectName char = 'Untitled Portfolio'
         Alpha double = 0.95
         Horizon double = 1
         RF double = 0.00
@@ -256,6 +259,10 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
         FactorR2       double = NaN
         FactorNames    cell = {}
         FactorResidVar double = NaN
+
+        % FRED API key — free key from fred.stlouisfed.org/docs/api/api_key.html
+        % Set once per session; also picked up from env var FRED_API_KEY on startup.
+        FredApiKey char = ''
     end
 
     %================ CONSTRUCTOR ================
@@ -263,6 +270,11 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
         function app = PortfolioRiskOptimizerApp
             createComponents(app);
             rng(app.RandSeed);
+            % Pick up FRED API key from environment if set
+            envKey = getenv('FRED_API_KEY');
+            if ~isempty(envKey)
+                app.FredApiKey = envKey;
+            end
         end
     end
 
@@ -277,19 +289,20 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             % Left panel — scrollable
             app.LeftPanel = uipanel(app.Grid,'Title','Controls','FontWeight','bold');
             app.LeftPanel.Layout.Row = 1; app.LeftPanel.Layout.Column = 1;
-            app.LeftGrid = uigridlayout(app.LeftPanel,[39 1]);
+            app.LeftGrid = uigridlayout(app.LeftPanel,[41 1]);
             app.LeftGrid.RowHeight = [ ...
                 {'fit'}    ... % 1  DATA header
                 {28}       ... % 2  Load CSV
                 {28}       ... % 3  Sample Data
-                {28}       ... % 4  Download Market Data (Stooq)
-                {'fit'}    ... % 5  Bloomberg / Datastream row
+                {28}       ... % 4  Download Market Data (Yahoo Finance)
+                {'fit'}    ... % 5  BBG Market | BBG Macro | Datastream row
                 {'fit'}    ... % 6  Start/End date row
-                {28}       ... % 7  Download FRED
+                {28}       ... % 7  Download Macro (FRED)
                 {'fit'}    ... % 8  DataType/Freq row
                 {'fit'}    ... % 9  Add Custom Ticker row
-                {'fit'}    ... % 10 Save/Load session row
-                {4}        ... % 11 spacer
+                {'fit'}    ... % 10 Project name row
+                {'fit'}    ... % 11 Save/Load session row
+                {4}        ... % 12 spacer
                 {'fit'}    ... % 9  ASSETS header
                 {90}       ... % 10 Asset listbox
                 {'fit'}    ... % 11 OVERLAYS header
@@ -309,7 +322,7 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                 {'fit'}    ... % 24 RISK header
                 {'fit'}    ... % 25 VaR Method dropdown
                 {'fit'}    ... % 26 Alpha/Horizon row
-                repmat({'fit'},1,10) ... % 27-36 reserve
+                repmat({'fit'},1,10) ... % 29-38 reserve
             ];
             app.LeftGrid.Padding = [10 10 10 10];
             app.LeftGrid.RowSpacing = 3;
@@ -321,13 +334,17 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                 'ButtonPushedFcn',@(s,e)onLoadCSV(app),'Icon','');
             app.SampleDataButton = uibutton(app.LeftGrid,'Text','Use Sample Data', ...
                 'ButtonPushedFcn',@(s,e)onUseSample(app));
-            app.DownloadDataButton = uibutton(app.LeftGrid,'Text','Download Market Data (Stooq)', ...
+            app.DownloadDataButton = uibutton(app.LeftGrid,'Text','Download Market Data (Yahoo Finance)', ...
                 'ButtonPushedFcn',@(s,e)onLoadMarketData(app));
 
-            bbgDsRow = uigridlayout(app.LeftGrid,[1 2]);
-            bbgDsRow.ColumnWidth = {'1x','1x'}; bbgDsRow.Padding = [0 0 0 0]; bbgDsRow.ColumnSpacing = 4;
-            app.BloombergButton = uibutton(bbgDsRow,'Text','Bloomberg', ...
-                'ButtonPushedFcn',@(s,e)onLoadBloomberg(app));
+            bbgDsRow = uigridlayout(app.LeftGrid,[1 3]);
+            bbgDsRow.ColumnWidth = {'1x','1x','1x'}; bbgDsRow.Padding = [0 0 0 0]; bbgDsRow.ColumnSpacing = 4;
+            app.BloombergButton = uibutton(bbgDsRow,'Text','BBG Market', ...
+                'ButtonPushedFcn',@(s,e)onLoadBloomberg(app), ...
+                'Tooltip','Download market price series from Bloomberg at selected frequency');
+            app.BloombergMacroButton = uibutton(bbgDsRow,'Text','BBG Macro', ...
+                'ButtonPushedFcn',@(s,e)onLoadBloombergMacro(app), ...
+                'Tooltip','Download macro/economic indicator series from Bloomberg');
             app.DatastreamButton = uibutton(bbgDsRow,'Text','Datastream', ...
                 'ButtonPushedFcn',@(s,e)onLoadDatastream(app));
 
@@ -338,8 +355,9 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             uilabel(dateRow,'Text','End:');
             app.EndDateField = uieditfield(dateRow,'text','Value',datestr(datetime('today'),'yyyymmdd')); %#ok<DATST>
 
-            app.DownloadMeasuresButton = uibutton(app.LeftGrid,'Text','Download Measures (FRED)', ...
-                'ButtonPushedFcn',@(s,e)onDownloadMeasures(app));
+            app.DownloadMeasuresButton = uibutton(app.LeftGrid,'Text','Download Macro (FRED)', ...
+                'ButtonPushedFcn',@(s,e)onDownloadMeasures(app), ...
+                'Tooltip','Download macro indicators from FRED and align to loaded dates');
 
             dtRow = uigridlayout(app.LeftGrid,[1 4]);
             dtRow.ColumnWidth = {'fit','1x','fit','1x'}; dtRow.Padding = [0 0 0 0]; dtRow.ColumnSpacing = 4;
@@ -357,13 +375,23 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             app.AddTickerButton = uibutton(tickerRow,'Text','+ Add', ...
                 'ButtonPushedFcn',@(s,e)onAddCustomTicker(app));
 
+            % Project name row
+            projRow = uigridlayout(app.LeftGrid,[1 2]);
+            projRow.ColumnWidth = {'fit','1x'}; projRow.Padding = [0 0 0 0]; projRow.ColumnSpacing = 4;
+            uilabel(projRow,'Text','Project:','FontWeight','bold');
+            app.ProjectNameField = uieditfield(projRow,'text','Value',app.ProjectName, ...
+                'Placeholder','Portfolio name', ...
+                'ValueChangedFcn',@(s,e)setField(app,'ProjectName',s.Value));
+
             % Save / Load session row
             slRow = uigridlayout(app.LeftGrid,[1 2]);
             slRow.ColumnWidth = {'1x','1x'}; slRow.Padding = [0 0 0 0]; slRow.ColumnSpacing = 4;
-            app.SaveSessionButton = uibutton(slRow,'Text','Save Session', ...
-                'ButtonPushedFcn',@(s,e)onSaveSession(app));
-            app.LoadSessionButton = uibutton(slRow,'Text','Load Session', ...
-                'ButtonPushedFcn',@(s,e)onLoadSession(app));
+            app.SaveSessionButton = uibutton(slRow,'Text','Save Project', ...
+                'ButtonPushedFcn',@(s,e)onSaveSession(app), ...
+                'Tooltip','Save portfolio, allocations and all settings to a .mat project file');
+            app.LoadSessionButton = uibutton(slRow,'Text','Open Project', ...
+                'ButtonPushedFcn',@(s,e)onLoadSession(app), ...
+                'Tooltip','Re-open a previously saved project file');
 
             % spacer
             uilabel(app.LeftGrid,'Text','');
@@ -1111,7 +1139,7 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                     end
                 end
 
-                processPriceData(app, allDates, allClose, names, failed, 'Stooq');
+                processPriceData(app, allDates, allClose, names, failed, 'Yahoo Finance');
             catch ME
                 uialert(app.UIFigure, ME.message, 'Market Data Error');
             end
@@ -1188,9 +1216,11 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
         end
 
         function onLoadBloomberg(app)
-            % Download market data from Bloomberg Desktop via Datafeed Toolbox
+            % Download market price series from Bloomberg Desktop via Datafeed Toolbox.
+            % Respects the Freq dropdown (Daily / Weekly / Monthly) and lets the user
+            % choose which Bloomberg field to pull (default: PX_LAST).
             try
-                % Default Bloomberg tickers and mapped names
+                % Default tickers and display names
                 bbgTickers = {'BIL US Equity','SHY US Equity','IEF US Equity','HYG US Equity', ...
                               'SPY US Equity','VGK US Equity','EWJ US Equity','EEM US Equity', ...
                               'DBC US Equity','QAI US Equity','GLD US Equity', ...
@@ -1201,21 +1231,25 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                               'Commodities','HedgeFunds','Gold', ...
                               'EUR_USD','JPY_USD','GBP_USD','CHF_USD','AUD_USD','CAD_USD'};
 
-                % Allow user to edit tickers
-                prompt = strjoin(cellfun(@(t,n) sprintf('%s = %s', n, t), names, bbgTickers, 'Uni', false), '\n');
-                answer = inputdlg({'Bloomberg tickers (name = BBG_TICKER, one per line):'}, ...
-                    'Bloomberg Data', [20 80], {prompt});
+                tickerPrompt = strjoin(cellfun(@(t,n) sprintf('%s = %s', n, t), names, bbgTickers, 'Uni', false), newline);
+                answer = inputdlg({ ...
+                    sprintf('Bloomberg field (e.g. PX_LAST, LAST_PRICE, YLD_YTM_MID)  [Frequency: %s]:', app.Freq), ...
+                    'Bloomberg tickers  (name = BBG_TICKER, one per line):'}, ...
+                    'Bloomberg Market Data', [1 70; 20 80], {'PX_LAST', tickerPrompt});
                 if isempty(answer), return; end
 
-                % Parse user input
-                lines = strsplit(answer{1}, newline);
+                bbgField = strtrim(answer{1});
+                if isempty(bbgField), bbgField = 'PX_LAST'; end
+
+                % Parse ticker / name pairs
+                lines = strsplit(answer{2}, newline);
                 bbgTickers = {}; names = {};
                 for li = 1:numel(lines)
                     ln = strtrim(lines{li});
                     if isempty(ln), continue; end
                     parts = strsplit(ln, '=');
                     if numel(parts) >= 2
-                        names{end+1} = strtrim(parts{1}); %#ok<AGROW>
+                        names{end+1}      = strtrim(parts{1}); %#ok<AGROW>
                         bbgTickers{end+1} = strtrim(strjoin(parts(2:end), '=')); %#ok<AGROW>
                     end
                 end
@@ -1223,19 +1257,31 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                     uialert(app.UIFigure, 'No valid tickers parsed.', 'Bloomberg'); return;
                 end
 
+                % Map app frequency to Bloomberg periodicitySelection
+                switch upper(app.Freq)
+                    case 'WEEKLY',  bbgFreq = 'WEEKLY';
+                    case 'MONTHLY', bbgFreq = 'MONTHLY';
+                    otherwise,      bbgFreq = 'DAILY';
+                end
+
                 d1 = datenum(app.StartDateField.Value, 'yyyymmdd'); %#ok<DATEFUN>
-                d2 = datenum(app.EndDateField.Value, 'yyyymmdd'); %#ok<DATEFUN>
+                d2 = datenum(app.EndDateField.Value,   'yyyymmdd'); %#ok<DATEFUN>
 
                 app.StatusLabel.Text = 'Connecting to Bloomberg...'; drawnow;
-                c = blp;  % connect to Bloomberg Desktop
+                c = blp;
                 connCleanup = onCleanup(@() close(c));
 
                 allDates = {}; allClose = {}; failed = {};
                 for i = 1:numel(bbgTickers)
-                    app.StatusLabel.Text = sprintf('Bloomberg: %s (%d/%d)...', names{i}, i, numel(bbgTickers));
+                    app.StatusLabel.Text = sprintf('Bloomberg: %s (%d/%d) [%s]...', ...
+                        names{i}, i, numel(bbgTickers), bbgFreq);
                     drawnow;
                     try
-                        d = history(c, bbgTickers{i}, 'LAST_PRICE', d1, d2, 'daily');
+                        d = history(c, bbgTickers{i}, bbgField, d1, d2, ...
+                            'periodicitySelection',     bbgFreq, ...
+                            'periodicityAdjustment',    'CALENDAR', ...
+                            'nonTradingDayFillOption',  'ALL_CALENDAR_DAYS', ...
+                            'nonTradingDayFillMethod',  'PREVIOUS_VALUE');
                         if isempty(d) || size(d,1) < 2
                             failed{end+1} = names{i}; %#ok<AGROW>
                             continue;
@@ -1247,7 +1293,8 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                     end
                 end
 
-                processPriceData(app, allDates, allClose, names, failed, 'Bloomberg');
+                processPriceData(app, allDates, allClose, names, failed, ...
+                    sprintf('Bloomberg/%s/%s', bbgField, bbgFreq));
             catch ME
                 if contains(ME.message, 'blp') || contains(ME.message, 'Bloomberg') || contains(ME.message, 'Undefined')
                     uialert(app.UIFigure, ...
@@ -1256,6 +1303,138 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                         'Bloomberg Error');
                 else
                     uialert(app.UIFigure, ME.message, 'Bloomberg Error');
+                end
+            end
+        end
+
+        function onLoadBloombergMacro(app)
+            % Download macro/economic indicator series from Bloomberg and merge into
+            % app.Measures (the same table used by FRED and the bootstrap engine).
+            % Series are pulled at monthly or quarterly frequency and forward-filled
+            % to align with the loaded market dates.
+            try
+                % Default Bloomberg macro tickers, internal names, and native frequency
+                macroTickers = { ...
+                    'GDP YOY Index',    'GDP_YoY',           'MONTHLY'; ...
+                    'CPI YOY Index',    'CPI_YoY',           'MONTHLY'; ...
+                    'NFP TCH Index',    'NFP_MoM',           'MONTHLY'; ...
+                    'USURTOT Index',    'Unemployment',      'MONTHLY'; ...
+                    'NAPMPMI Index',    'ISM_Mfg_PMI',       'MONTHLY'; ...
+                    'IP CHNG Index',    'IndustrialProd_MoM','MONTHLY'; ...
+                    'RSTAMOM Index',    'RetailSales_MoM',   'MONTHLY'; ...
+                    'FEDL01 Index',     'FedFunds',          'MONTHLY'; ...
+                    'USGG10YR Index',   'TenYr',             'MONTHLY'; ...
+                    'USGG2YR Index',    'TwoYr',             'MONTHLY'; ...
+                    'USGGBE10 Index',   'BreakevenInfl_10Y', 'MONTHLY'; ...
+                    'USYC2Y10 Index',   'Curve_2s10s',       'MONTHLY'; ...
+                    'DXY Curncy',       'DXY',               'MONTHLY'; ...
+                    'LF98TRUU Index',   'HY_Spread',         'MONTHLY'; ...
+                    'LUACTRUU Index',   'IG_Spread',         'MONTHLY'; ...
+                    'VIX Index',        'VIX',               'MONTHLY'; ...
+                    'CL1 Comdty',       'WTI',               'MONTHLY'};
+
+                % Build editable prompt
+                tickerLines = cellfun(@(n,t,f) sprintf('%s | %s | %s', n, t, f), ...
+                    macroTickers(:,2), macroTickers(:,1), macroTickers(:,3), 'Uni', false);
+                prompt = strjoin(tickerLines, newline);
+                answer = inputdlg({ ...
+                    ['Bloomberg macro tickers' newline ...
+                     'Format:  InternalName | BBG_Ticker | Frequency (MONTHLY/QUARTERLY/DAILY)']}, ...
+                    'Bloomberg Macro Data', [22 80], {prompt});
+                if isempty(answer), return; end
+
+                % Parse user input
+                lines = strsplit(answer{1}, newline);
+                parsedNames = {}; parsedTickers = {}; parsedFreqs = {};
+                for li = 1:numel(lines)
+                    ln = strtrim(lines{li});
+                    if isempty(ln), continue; end
+                    parts = strsplit(ln, '|');
+                    if numel(parts) >= 2
+                        parsedNames{end+1}   = strtrim(parts{1}); %#ok<AGROW>
+                        parsedTickers{end+1} = strtrim(parts{2}); %#ok<AGROW>
+                        if numel(parts) >= 3
+                            parsedFreqs{end+1} = upper(strtrim(parts{3})); %#ok<AGROW>
+                        else
+                            parsedFreqs{end+1} = 'MONTHLY'; %#ok<AGROW>
+                        end
+                    end
+                end
+                if isempty(parsedTickers)
+                    uialert(app.UIFigure, 'No valid entries parsed.', 'Bloomberg Macro'); return;
+                end
+
+                if isempty(app.Dates)
+                    uialert(app.UIFigure, ...
+                        'Load market data first so dates are available for alignment.', ...
+                        'Bloomberg Macro'); return;
+                end
+
+                d1 = datenum(app.StartDateField.Value, 'yyyymmdd'); %#ok<DATEFUN>
+                d2 = datenum(app.EndDateField.Value,   'yyyymmdd'); %#ok<DATEFUN>
+
+                app.StatusLabel.Text = 'Connecting to Bloomberg for macro data...'; drawnow;
+                c = blp;
+                connCleanup = onCleanup(@() close(c));
+
+                targetDates = app.Dates;
+
+                % Start from existing Measures table or create fresh
+                if isempty(app.Measures) || height(app.Measures) == 0 || ...
+                        ~isequal(app.Measures.Date, targetDates(:))
+                    measures = table(targetDates(:), 'VariableNames', {'Date'});
+                else
+                    measures = app.Measures;
+                end
+
+                failed = {};
+                for i = 1:numel(parsedTickers)
+                    app.StatusLabel.Text = sprintf('Bloomberg Macro: %s (%d/%d)...', ...
+                        parsedNames{i}, i, numel(parsedTickers));
+                    drawnow;
+                    try
+                        d = history(c, parsedTickers{i}, 'PX_LAST', d1, d2, ...
+                            'periodicitySelection',    parsedFreqs{i}, ...
+                            'periodicityAdjustment',   'CALENDAR', ...
+                            'nonTradingDayFillOption', 'ALL_CALENDAR_DAYS', ...
+                            'nonTradingDayFillMethod', 'PREVIOUS_VALUE');
+                        if isempty(d) || size(d,1) < 2
+                            failed{end+1} = parsedNames{i}; %#ok<AGROW>
+                            continue;
+                        end
+                        srcDates = datetime(d(:,1), 'ConvertFrom', 'datenum');
+                        srcVals  = d(:,2);
+                        colVals  = forwardFillToTarget(app, srcDates, srcVals, targetDates);
+                        measures.(parsedNames{i}) = colVals;
+                    catch dlErr
+                        failed{end+1} = sprintf('%s (%s)', parsedNames{i}, dlErr.message); %#ok<AGROW>
+                    end
+                end
+
+                app.Measures = measures;
+                nLoaded = numel(parsedTickers) - numel(failed);
+                if ~isempty(app.MeasuresInfoLabel)
+                    app.MeasuresInfoLabel.Text = sprintf( ...
+                        'Measures: %d rows, %d cols (%d from BBG Macro).', ...
+                        height(measures), width(measures)-1, nLoaded);
+                end
+
+                msg = sprintf('Bloomberg Macro: loaded %d / %d series.', nLoaded, numel(parsedTickers));
+                if ~isempty(failed)
+                    msg = [msg newline 'Failed: ' strjoin(failed, ', ')];
+                end
+                app.StatusLabel.Text = msg;
+                if ~isempty(failed)
+                    uialert(app.UIFigure, msg, 'Bloomberg Macro — Partial');
+                end
+            catch ME
+                if contains(ME.message, 'blp') || contains(ME.message, 'Bloomberg') || contains(ME.message, 'Undefined')
+                    uialert(app.UIFigure, ...
+                        ['Bloomberg connection failed. Ensure Bloomberg Terminal is running ' ...
+                         'and Datafeed Toolbox is licensed.\n\nError: ' ME.message], ...
+                        'Bloomberg Error');
+                else
+                    uialert(app.UIFigure, ME.message, 'Bloomberg Macro Error');
                 end
             end
         end
@@ -1391,37 +1570,66 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
         end
 
         function T = downloadStooqSeries(~, ticker, startDate, endDate)
-            url = sprintf('https://stooq.com/q/d/l/?s=%s&d1=%s&d2=%s&i=d', ticker, startDate, endDate);
-            tmpFile = [tempname '.csv'];
-            cleanUp = onCleanup(@() delete(tmpFile));
+            % Stooq now returns a JavaScript challenge page instead of CSV data.
+            % Primary source: Yahoo Finance JSON API (no key required, works reliably).
+            % Ticker conversion: 'spy.us' -> 'SPY', 'vgk.us' -> 'VGK', etc.
+
+            % --- convert Stooq ticker to Yahoo Finance ticker ---
+            yfTicker = upper(ticker);
+            dotPos = strfind(yfTicker, '.');
+            if ~isempty(dotPos)
+                yfTicker = yfTicker(1:dotPos(1)-1);
+            end
+
+            % --- convert yyyymmdd strings to Unix timestamps ---
             try
-                websave(tmpFile, url);
-            catch ME
-                error('Failed to download %s: %s', ticker, ME.message);
+                d1_dt = datetime(startDate, 'InputFormat', 'yyyyMMdd', 'TimeZone', 'UTC');
+                d2_dt = datetime(endDate,   'InputFormat', 'yyyyMMdd', 'TimeZone', 'UTC');
+            catch
+                d1_dt = datetime(startDate, 'InputFormat', 'yyyyMMdd');
+                d2_dt = datetime(endDate,   'InputFormat', 'yyyyMMdd');
             end
+            p1 = num2str(floor(posixtime(d1_dt)));
+            p2 = num2str(floor(posixtime(d2_dt)));
+
+            url = sprintf( ...
+                'https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&period1=%s&period2=%s&events=history', ...
+                yfTicker, p1, p2);
+            opts = weboptions( ...
+                'HeaderFields', {'User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}, ...
+                'Timeout', 30);
+
             try
-                raw = readtable(tmpFile, 'TextType', 'string');
+                resp = webread(url, opts);
             catch ME
-                error('Failed to parse CSV for %s: %s', ticker, ME.message);
+                % Fallback: try query2 mirror
+                url2 = strrep(url, 'query1.', 'query2.');
+                try
+                    resp = webread(url2, opts);
+                catch
+                    error('Failed to download %s from Yahoo Finance: %s', yfTicker, ME.message);
+                end
             end
-            if isempty(raw) || height(raw) < 2
-                T = table();
-                return;
+
+            try
+                result  = resp.chart.result;
+                rawTS   = result.timestamp;
+                rawQ    = result.indicators.quote;
+
+                if iscell(rawTS),     rawTS   = cell2mat(rawTS);     end
+                closes = rawQ.close;
+                if iscell(closes),    closes  = cell2mat(closes);    end
+
+                dt = datetime(rawTS, 'ConvertFrom', 'posixtime', 'TimeZone', 'UTC');
+                dt.TimeZone = '';  % strip tz so downstream code sees plain datetime
+
+                T = table(dt(:), closes(:), 'VariableNames', {'Date','Close'});
+                bad = isnan(T.Close) | T.Close <= 0;
+                T = T(~bad, :);
+                T = sortrows(T, 'Date');
+            catch ME
+                error('Failed to parse Yahoo Finance response for %s: %s', yfTicker, ME.message);
             end
-            % Stooq returns: Date, Open, High, Low, Close, Volume
-            if ismember('Date', raw.Properties.VariableNames)
-                raw.Date = datetime(raw.Date);
-            else
-                error('No Date column in Stooq response for %s.', ticker);
-            end
-            if ~ismember('Close', raw.Properties.VariableNames)
-                error('No Close column in Stooq response for %s.', ticker);
-            end
-            T = table(raw.Date, raw.Close, 'VariableNames', {'Date','Close'});
-            % Remove NaN close prices
-            bad = isnan(T.Close) | T.Close <= 0;
-            T = T(~bad, :);
-            T = sortrows(T, 'Date');
         end
 
         function onAddCustomTicker(app)
@@ -1431,7 +1639,7 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                 uialert(app.UIFigure, 'Enter an ETF ticker (e.g. tlt.us, qqq.us).', 'No Ticker');
                 return;
             end
-            % Ensure .us suffix for Stooq
+            % Normalize ticker: add .us suffix so asset name can be extracted cleanly
             if ~contains(ticker, '.')
                 ticker = [ticker '.us'];
             end
@@ -1652,54 +1860,55 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             end
         end
 
-        function T = downloadFREDSeries(~, seriesID, startDate, endDate)
-            url = sprintf('https://fred.stlouisfed.org/graph/fredgraph.csv?bgcolor=%%23e1e9f0&fo=open+sans&id=%s&cosd=%s&coed=%s', ...
-                seriesID, startDate, endDate);
-            tmpFile = [tempname '.csv'];
-            cleanUp = onCleanup(@() delete(tmpFile));
-            try
-                websave(tmpFile, url);
-            catch ME
-                error('Failed to download FRED %s: %s', seriesID, ME.message);
+        function T = downloadFREDSeries(app, seriesID, startDate, endDate)
+            % Uses FRED REST API (api.stlouisfed.org) — reliable, no CDN block.
+            % Requires a free API key: fred.stlouisfed.org/docs/api/api_key.html
+            % Key is read from: app.FredApiKey → env var FRED_API_KEY → user prompt.
+
+            % Resolve API key
+            apiKey = strtrim(app.FredApiKey);
+            if isempty(apiKey)
+                apiKey = strtrim(getenv('FRED_API_KEY'));
             end
-            try
-                % FRED CSV: columns are observation_date + seriesID
-                % Value column may contain '.' for missing — read as text
-                opts = detectImportOptions(tmpFile);
-                % Find the value column (named after the series ID)
-                vnames = opts.VariableNames;
-                valIdx = find(~strcmpi(vnames, 'observation_date'), 1);
-                if ~isempty(valIdx)
-                    opts = setvartype(opts, vnames{valIdx}, 'string');
+            if isempty(apiKey)
+                answer = inputdlg( ...
+                    {['FRED API key required (free at fred.stlouisfed.org/docs/api/api_key.html).' char(10) ...
+                      'Enter key to download macro data for this session:']}, ...
+                    'FRED API Key', 1, {''});
+                if isempty(answer) || isempty(strtrim(answer{1}))
+                    error('FRED:noApiKey', ...
+                        ['No FRED API key provided. Get a free key at:\n' ...
+                         '  https://fred.stlouisfed.org/docs/api/api_key.html\n' ...
+                         'Then set the environment variable FRED_API_KEY before starting MATLAB.']);
                 end
-                raw = readtable(tmpFile, opts);
+                apiKey = strtrim(answer{1});
+                app.FredApiKey = apiKey;   % cache for rest of session
+            end
+
+            % Call REST API
+            url = sprintf( ...
+                'https://api.stlouisfed.org/fred/series/observations?series_id=%s&observation_start=%s&observation_end=%s&api_key=%s&file_type=json&units=lin', ...
+                seriesID, startDate, endDate, apiKey);
+            opts = weboptions('Timeout', 30, 'ContentType', 'json');
+            try
+                resp = webread(url, opts);
             catch ME
-                error('Failed to parse FRED CSV for %s: %s', seriesID, ME.message);
+                if contains(ME.message, '400') || contains(ME.message, 'Bad Request')
+                    error('FRED:badKey', ...
+                        ['FRED rejected the API key for series %s.\n' ...
+                         'Verify your key at fred.stlouisfed.org/docs/api/api_key.html'], seriesID);
+                end
+                error('FRED:httpError', 'FRED REST API request for %s failed: %s', seriesID, ME.message);
             end
-            if isempty(raw) || height(raw) < 1
-                T = table();
-                return;
+
+            if ~isfield(resp, 'observations') || isempty(resp.observations)
+                T = table(); return;
             end
-            % Extract date column
-            if ismember('observation_date', raw.Properties.VariableNames)
-                dt = datetime(raw.observation_date);
-            elseif ismember('DATE', raw.Properties.VariableNames)
-                dt = datetime(raw.DATE);
-            else
-                dt = datetime(raw{:,1});
-            end
-            % Extract value column (second column, named after series ID)
-            vnames = raw.Properties.VariableNames;
-            valColIdx = ~strcmpi(vnames, 'observation_date') & ~strcmpi(vnames, 'DATE');
-            valColName = vnames{find(valColIdx, 1)};
-            valRaw = raw.(valColName);
-            if isstring(valRaw) || iscellstr(valRaw)
-                vals = str2double(valRaw); % '.' becomes NaN automatically
-            else
-                vals = double(valRaw);
-            end
-            T = table(dt, vals, 'VariableNames', {'Date','Value'});
-            T = T(~isnan(T.Value), :);
+            obs   = resp.observations;
+            dates = datetime({obs.date}, 'InputFormat', 'yyyy-MM-dd')';
+            vals  = str2double({obs.value})';  % FRED uses '.' for NaN; str2double handles it
+            good  = isfinite(vals) & ~isnat(dates);
+            T = table(dates(good), vals(good), 'VariableNames', {'Date','Value'});
             T = sortrows(T, 'Date');
         end
 
@@ -4025,64 +4234,89 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
         %% ============ SESSION SAVE / LOAD ============
 
         function onSaveSession(app)
-            % Save all data, settings, and portfolio state to a .mat file
-            [f, p] = uiputfile({'*.mat','MATLAB Session (*.mat)'}, 'Save Session', ...
-                fullfile(pwd, 'RiskToolSession.mat'));
+            % Save portfolio project — all data, allocations, macro measures, and
+            % settings — to a .mat file.  Project name is used as the default filename.
+            projName = strtrim(app.ProjectName);
+            if isempty(projName), projName = 'Untitled_Portfolio'; end
+            safeName  = regexprep(projName, '[^a-zA-Z0-9_\-]', '_');
+            [f, p] = uiputfile({'*.mat','Risk Portfolio Project (*.mat)'}, 'Save Project', ...
+                fullfile(pwd, [safeName '.mat']));
             if isequal(f, 0), return; end
             filepath = fullfile(p, f);
             try
                 session = struct();
+                % Project metadata
+                session.Version      = 2;
+                session.ProjectName  = projName;
+                session.SavedAt      = datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss');
+                session.MATLABVer    = version;
                 % Data
-                session.R = app.R;
-                session.Dates = app.Dates;
+                session.R          = app.R;
+                session.Dates      = app.Dates;
                 session.AssetNames = app.AssetNames;
-                session.W = app.W;
-                session.Measures = app.Measures;
+                session.W          = app.W;
+                session.Measures   = app.Measures;
                 session.AssetETFMap = app.AssetETFMap;
                 % Portfolios
                 session.SAA = app.SAA;
                 session.TAA = app.TAA;
                 % Settings
-                session.Freq = app.Freq;
-                session.DataType = app.DataType;
-                session.Alpha = app.Alpha;
-                session.Horizon = app.Horizon;
-                session.RF = app.RF;
-                session.LongOnly = app.LongOnly;
-                session.LB = app.LB;
-                session.UB = app.UB;
-                session.Optimizer = app.Optimizer;
-                session.Objective = app.Objective;
-                session.TargetRet = app.TargetRet;
+                session.Freq             = app.Freq;
+                session.DataType         = app.DataType;
+                session.Alpha            = app.Alpha;
+                session.Horizon          = app.Horizon;
+                session.RF               = app.RF;
+                session.LongOnly         = app.LongOnly;
+                session.LB               = app.LB;
+                session.UB               = app.UB;
+                session.Optimizer        = app.Optimizer;
+                session.Objective        = app.Objective;
+                session.TargetRet        = app.TargetRet;
                 session.NormalizeCombined = app.NormalizeCombined;
-                session.RandSeed = app.RandSeed;
-                session.MCPaths = app.MCPaths;
+                session.RandSeed         = app.RandSeed;
+                session.MCPaths          = app.MCPaths;
                 % Bootstrap conditions
-                session.BootCondData = app.BootCondTable.Data;
+                session.BootCondData  = app.BootCondTable.Data;
                 session.BootCondLogic = app.BootCondLogicDrop.Value;
-                session.BlockLen = app.BlockLenField.Value;
-                session.BootPaths = app.PathsField.Value;
+                session.BlockLen      = app.BlockLenField.Value;
+                session.BootPaths     = app.PathsField.Value;
                 % Date range
                 session.StartDate = app.StartDateField.Value;
-                session.EndDate = app.EndDateField.Value;
+                session.EndDate   = app.EndDateField.Value;
                 % Scenarios
                 session.Scenarios = app.Scenarios;
 
                 save(filepath, 'session', '-v7.3');
-                app.StatusLabel.Text = sprintf('Session saved: %s', filepath);
+                app.StatusLabel.Text = sprintf('Project saved: %s', filepath);
             catch ME
                 uialert(app.UIFigure, sprintf('Save failed: %s', ME.message), 'Save Error');
             end
         end
 
         function onLoadSession(app)
-            % Load a previously saved session
-            [f, p] = uigetfile({'*.mat','MATLAB Session (*.mat)'}, 'Load Session');
+            % Open a previously saved project file
+            [f, p] = uigetfile({'*.mat','Risk Portfolio Project (*.mat)'}, 'Open Project');
             if isequal(f, 0), return; end
             filepath = fullfile(p, f);
             try
                 loaded = load(filepath, 'session');
                 s = loaded.session;
+
+                % Restore project metadata (graceful fallback for v1 files)
+                if isfield(s, 'ProjectName') && ~isempty(s.ProjectName)
+                    app.ProjectName = s.ProjectName;
+                    app.ProjectNameField.Value = s.ProjectName;
+                else
+                    % Derive name from filename for legacy sessions
+                    [~, baseName] = fileparts(f);
+                    app.ProjectName = strrep(baseName, '_', ' ');
+                    app.ProjectNameField.Value = app.ProjectName;
+                end
+                if isfield(s, 'SavedAt')
+                    savedInfo = sprintf(' (saved %s)', char(s.SavedAt));
+                else
+                    savedInfo = '';
+                end
 
                 % Restore data
                 app.R = s.R;
@@ -4167,8 +4401,8 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                 try updateCombinedFXSplit(app); catch; end
                 try updateEigenDecomp(app); catch; end
 
-                app.StatusLabel.Text = sprintf('Session loaded: %s (%d assets, %d obs)', ...
-                    f, numel(app.AssetNames), size(app.R,1));
+                app.StatusLabel.Text = sprintf('Project "%s" loaded%s — %d assets, %d obs', ...
+                    app.ProjectName, savedInfo, numel(app.AssetNames), size(app.R,1));
             catch ME
                 uialert(app.UIFigure, sprintf('Load failed: %s', ME.message), 'Load Error');
             end
@@ -4680,6 +4914,17 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             fid = fopen(texFile, 'w', 'n', 'UTF-8');
             fprintf(fid, '%s\n', L{:});
             fclose(fid);
+        end
+    end
+
+    % ------------------------------------------------------------------ %
+    methods (Static, Access = private)
+        function safeDeleteTemp(f)
+            % Delete a temp file only if it exists, avoiding "File not found" warnings
+            % when websave cleans up the file internally before onCleanup fires.
+            if exist(f, 'file') == 2
+                delete(f);
+            end
         end
     end
 end

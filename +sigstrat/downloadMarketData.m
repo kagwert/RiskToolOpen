@@ -1,5 +1,5 @@
 function mkt = downloadMarketData(startDate, endDate)
-%SIGSTRAT.DOWNLOADMARKETDATA Download S&P 500 + T-Bill data from Stooq.
+%SIGSTRAT.DOWNLOADMARKETDATA Download S&P 500 + T-Bill data from Yahoo Finance.
 %   mkt = sigstrat.downloadMarketData(startDate, endDate)
 %
 % Inputs:
@@ -32,12 +32,12 @@ function mkt = downloadMarketData(startDate, endDate)
         end
     end
 
-    %% Download S&P 500 index from Stooq
-    fprintf('Downloading S&P 500 (^spx) from Stooq...\n');
+    %% Download S&P 500 index from Yahoo Finance
+    fprintf('Downloading S&P 500 (^GSPC) from Yahoo Finance...\n');
     spxTbl = downloadStooqSeries('^spx', startDate, endDate);
     if isempty(spxTbl) || height(spxTbl) < 10
         % Fallback: try SPY ETF
-        fprintf('  ^spx failed, trying spy.us...\n');
+        fprintf('  ^GSPC failed, trying SPY ETF...\n');
         spxTbl = downloadStooqSeries('spy.us', startDate, endDate);
     end
     if isempty(spxTbl) || height(spxTbl) < 10
@@ -45,7 +45,7 @@ function mkt = downloadMarketData(startDate, endDate)
     end
 
     %% Download T-Bill proxy
-    fprintf('Downloading T-Bill proxy (bil.us) from Stooq...\n');
+    fprintf('Downloading T-Bill proxy (BIL) from Yahoo Finance...\n');
     cashTbl = downloadStooqSeries('bil.us', startDate, endDate);
     hasCashETF = ~isempty(cashTbl) && height(cashTbl) >= 10;
 
@@ -99,28 +99,78 @@ function mkt = downloadMarketData(startDate, endDate)
     save(cacheFile, 'mkt');
 end
 
-%% ---- Stooq single-series download ----
+%% ---- Yahoo Finance single-series download (replaces Stooq) ----
 function T = downloadStooqSeries(ticker, startDate, endDate)
-    url = sprintf('https://stooq.com/q/d/l/?s=%s&d1=%s&d2=%s&i=d', ticker, startDate, endDate);
-    tmpFile = [tempname '.csv'];
-    cleanUp = onCleanup(@() deleteIfExists(tmpFile)); %#ok<NASGU>
+    % Stooq returns a JS challenge page to non-browser requests — use Yahoo Finance JSON API
+    yfTicker = stooqToYahoo(ticker);
+
     try
-        websave(tmpFile, url);
+        d1_dt = datetime(startDate, 'InputFormat', 'yyyyMMdd', 'TimeZone', 'UTC');
+        d2_dt = datetime(endDate,   'InputFormat', 'yyyyMMdd', 'TimeZone', 'UTC');
     catch
-        T = table(); return;
+        d1_dt = datetime(startDate, 'InputFormat', 'yyyyMMdd');
+        d2_dt = datetime(endDate,   'InputFormat', 'yyyyMMdd');
     end
-    raw = readtable(tmpFile, 'TextType', 'string');
-    if isempty(raw) || height(raw) < 2
-        T = table(); return;
+    p1 = num2str(floor(posixtime(d1_dt)));
+    p2 = num2str(floor(posixtime(d2_dt)));
+
+    url = sprintf( ...
+        'https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&period1=%s&period2=%s&events=history', ...
+        yfTicker, p1, p2);
+    opts = weboptions( ...
+        'HeaderFields', {'User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}, ...
+        'Timeout', 30);
+
+    try
+        resp = webread(url, opts);
+    catch
+        url2 = strrep(url, 'query1.', 'query2.');
+        try
+            resp = webread(url2, opts);
+        catch
+            T = table(); return;
+        end
     end
-    if ~ismember('Date', raw.Properties.VariableNames) || ~ismember('Close', raw.Properties.VariableNames)
-        T = table(); return;
+
+    try
+        result = resp.chart.result;
+        rawTS  = result.timestamp;
+        rawQ   = result.indicators.quote;
+        if iscell(rawTS), rawTS = cell2mat(rawTS); end
+        closes = rawQ.close;
+        if iscell(closes), closes = cell2mat(closes); end
+        dt = datetime(rawTS, 'ConvertFrom', 'posixtime', 'TimeZone', 'UTC');
+        dt.TimeZone = '';
+        dt = dateshift(dt, 'start', 'day');
+        T = table(dt(:), closes(:), 'VariableNames', {'Date','Close'});
+        bad = isnan(T.Close) | T.Close <= 0;
+        T = T(~bad, :);
+        T = sortrows(T, 'Date');
+    catch
+        T = table();
     end
-    raw.Date = datetime(raw.Date);
-    T = table(raw.Date, raw.Close, 'VariableNames', {'Date','Close'});
-    bad = isnan(T.Close) | T.Close <= 0;
-    T = T(~bad, :);
-    T = sortrows(T, 'Date');
+end
+
+%% ---- Map Stooq-style tickers to Yahoo Finance tickers ----
+function yfTicker = stooqToYahoo(stooqTicker)
+    t = lower(strtrim(stooqTicker));
+    switch t
+        case {'^spx', 'spx'},  yfTicker = '^GSPC';
+        case {'^ndx', 'ndx'},  yfTicker = '^NDX';
+        case {'^dji', 'dji'},  yfTicker = '^DJI';
+        case {'^vix', 'vix'},  yfTicker = '^VIX';
+        otherwise
+            if startsWith(t, '^')
+                yfTicker = ['^' upper(t(2:end))];
+            else
+                dotPos = strfind(t, '.');
+                if ~isempty(dotPos)
+                    yfTicker = upper(t(1:dotPos(1)-1));
+                else
+                    yfTicker = upper(t);
+                end
+            end
+    end
 end
 
 %% ---- Synthesize cash from FRED Fed Funds ----
@@ -145,50 +195,37 @@ function cashRet = synthesizeCashFromFRED(targetDates, startDate, endDate)
     cashRet(~isfinite(cashRet)) = 0;
 end
 
-%% ---- Download single FRED series ----
+%% ---- Download single FRED series (REST API) ----
 function T = downloadFREDSeries(seriesID, startDate, endDate)
-    url = sprintf('https://fred.stlouisfed.org/graph/fredgraph.csv?bgcolor=%%23e1e9f0&fo=open+sans&id=%s&cosd=%s&coed=%s', ...
-        seriesID, startDate, endDate);
-    tmpFile = [tempname '.csv'];
-    cleanUp = onCleanup(@() deleteIfExists(tmpFile)); %#ok<NASGU>
+    % Uses FRED REST API — not the CDN-gated fredgraph.csv endpoint.
+    % Set env var FRED_API_KEY (free key from fred.stlouisfed.org/docs/api/api_key.html).
+    apiKey = strtrim(getenv('FRED_API_KEY'));
+    if isempty(apiKey)
+        fprintf('  [SKIP] FRED %s — FRED_API_KEY env var not set; using constant cash rate fallback.\n', seriesID);
+        T = table(); return;
+    end
+    T = callFredRestApi(apiKey, seriesID, startDate, endDate);
+end
+
+%% ---- FRED REST API call ----
+function T = callFredRestApi(apiKey, seriesID, startDate, endDate)
+    url = sprintf( ...
+        'https://api.stlouisfed.org/fred/series/observations?series_id=%s&observation_start=%s&observation_end=%s&api_key=%s&file_type=json&units=lin', ...
+        seriesID, startDate, endDate, apiKey);
+    opts = weboptions('Timeout', 30, 'ContentType', 'json');
     try
-        websave(tmpFile, url);
+        resp = webread(url, opts);
     catch
         T = table(); return;
     end
-
-    opts = detectImportOptions(tmpFile);
-    vnames = opts.VariableNames;
-    valIdx = find(~strcmpi(vnames, 'observation_date') & ~strcmpi(vnames, 'DATE'), 1);
-    if ~isempty(valIdx)
-        opts = setvartype(opts, vnames{valIdx}, 'string');
-    end
-    raw = readtable(tmpFile, opts);
-
-    if isempty(raw) || height(raw) < 1
+    if ~isfield(resp, 'observations') || isempty(resp.observations)
         T = table(); return;
     end
-
-    if ismember('observation_date', raw.Properties.VariableNames)
-        dt = datetime(raw.observation_date);
-    elseif ismember('DATE', raw.Properties.VariableNames)
-        dt = datetime(raw.DATE);
-    else
-        dt = datetime(raw{:,1});
-    end
-
-    vn = raw.Properties.VariableNames;
-    valColIdx = ~strcmpi(vn, 'observation_date') & ~strcmpi(vn, 'DATE');
-    valColName = vn{find(valColIdx, 1)};
-    valRaw = raw.(valColName);
-    if isstring(valRaw) || iscell(valRaw)
-        valNum = str2double(valRaw);
-    else
-        valNum = double(valRaw);
-    end
-
-    good = isfinite(valNum) & ~isnat(dt);
-    T = table(dt(good), valNum(good), 'VariableNames', {'Date','Value'});
+    obs   = resp.observations;
+    dates = datetime({obs.date}, 'InputFormat', 'yyyy-MM-dd')';
+    vals  = str2double({obs.value})';  % FRED uses '.' for missing; str2double → NaN
+    good  = isfinite(vals) & ~isnat(dates);
+    T = table(dates(good), vals(good), 'VariableNames', {'Date','Value'});
     T = sortrows(T, 'Date');
 end
 
@@ -211,6 +248,3 @@ function aligned = forwardFill(srcDates, srcVals, targetDates)
     end
 end
 
-function deleteIfExists(f)
-    if exist(f, 'file'), delete(f); end
-end

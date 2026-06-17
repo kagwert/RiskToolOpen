@@ -595,11 +595,31 @@ classdef DataManager < Model.BaseModel
                 'ContentType', 'json', ...
                 'HeaderFields', {'User-Agent', ...
                     'Mozilla/5.0 (compatible; MATLAB DataManager)'});
-            try
-                resp = webread(fullUrl, opts);
-            catch ME
+            % Try query1 with up to 3 attempts (handles transient 429 rate-limits)
+            resp = [];
+            lastErr = [];
+            for attempt = 1:3
+                try
+                    resp = webread(fullUrl, opts);
+                    break;
+                catch ME
+                    lastErr = ME;
+                    if contains(ME.message, '429') && attempt < 3
+                        pause(attempt * 2);   % back-off: 2 s, 4 s
+                    elseif attempt == 3 && contains(ME.message, '429')
+                        % Final fallback: try query2 host
+                        url2 = strrep(fullUrl, 'query1.', 'query2.');
+                        try
+                            resp = webread(url2, opts);
+                        catch ME2
+                            lastErr = ME2;
+                        end
+                    end
+                end
+            end
+            if isempty(resp)
                 error('SignalBuilder:DataManager:yahooHttpError', ...
-                    'Yahoo Finance request failed: %s', ME.message);
+                    'Yahoo Finance request failed: %s', lastErr.message);
             end
             try
                 result     = resp.chart.result{1};
@@ -676,30 +696,22 @@ classdef DataManager < Model.BaseModel
 
         % -------------------------------------------------------------- %
         function tt = callStooqApi(obj, ticker, d1, d2)
-        % callStooqApi  HTTP GET Stooq CSV download endpoint (no API key).
+        % callStooqApi  Redirects to Yahoo Finance (Stooq returns JS challenge pages).
         %   d1, d2 are date strings in 'yyyymmdd' format.
-        %
-        %   NOTE: webread does not accept a params struct in R2021b;
-        %   query parameters are embedded directly in the URL string.
-            stooqTicker = Model.DataManager.formatStooqTicker(ticker);
-            queryStr = sprintf('?s=%s&d1=%s&d2=%s&i=d', ...
-                char(stooqTicker), d1, d2);
-            fullUrl = [char(Model.DataManager.STOOQ_BASE_URL) queryStr];
-            opts = weboptions('Timeout', obj.TimeoutSec, ...
-                'ContentType', 'text', ...
-                'HeaderFields', {'User-Agent', ...
-                    'Mozilla/5.0 (compatible; MATLAB SignalBuilder)'});
+            yfTicker = Model.DataManager.stooqToYahooTicker(ticker);
             try
-                csvText = webread(fullUrl, opts);
+                d1_dt = datetime(d1, 'InputFormat', 'yyyyMMdd', 'TimeZone', 'UTC');
+                d2_dt = datetime(d2, 'InputFormat', 'yyyyMMdd', 'TimeZone', 'UTC');
+            catch
+                d1_dt = datetime(d1, 'InputFormat', 'yyyyMMdd');
+                d2_dt = datetime(d2, 'InputFormat', 'yyyyMMdd');
+            end
+            try
+                tt = obj.callYahooApi(yfTicker, posixtime(d1_dt), posixtime(d2_dt));
             catch ME
                 error('SignalBuilder:DataManager:stooqHttpError', ...
-                    'Stooq request failed: %s', ME.message);
+                    'Yahoo Finance fallback for "%s" failed: %s', ticker, ME.message);
             end
-            % Stooq CSV header: Date,Open,High,Low,Close,Volume
-            tt = obj.parseCsvText(csvText, 'Date', ...
-                {'Open','High','Low','Close','Volume'}, ...
-                {'Open','High','Low','Close','Volume'}, ...
-                '', '', 'America/New_York');
         end
 
     end   % end private API callers
@@ -1019,6 +1031,27 @@ classdef DataManager < Model.BaseModel
             t = upper(char(ticker));
             if ~contains(t, '.') && ~startsWith(t, '^')
                 t = [t '.US'];
+            end
+        end
+
+        function t = stooqToYahooTicker(stooqTicker)
+        % stooqToYahooTicker  Convert a Stooq-format ticker to Yahoo Finance format.
+        %   Strips country suffix (.US, .UK, etc.) and maps index tickers.
+        %
+        %   Model.DataManager.stooqToYahooTicker('SPY.US') → 'SPY'
+        %   Model.DataManager.stooqToYahooTicker('^SPX')   → '^GSPC'
+        %   Model.DataManager.stooqToYahooTicker('^NDX')   → '^NDX'
+            t = upper(strtrim(char(stooqTicker)));
+            if ~startsWith(t, '^')
+                dotPos = strfind(t, '.');
+                if ~isempty(dotPos)
+                    t = t(1:dotPos(1)-1);
+                end
+            end
+            % Map index tickers that differ between Stooq and Yahoo Finance
+            switch t
+                case '^SPX', t = '^GSPC';
+                % ^NDX, ^DJI, ^VIX are identical on Yahoo Finance
             end
         end
     end

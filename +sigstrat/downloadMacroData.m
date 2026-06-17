@@ -144,46 +144,37 @@ function cfg = buildMinimalCfg(targetDates) %#ok<INUSD>
                            'HY_Spread','IG_Spread','NFP_level','RetailSales_level','WTI_level'};
 end
 
-%% ---- Download single FRED series ----
+%% ---- Download single FRED series (REST API) ----
 function T = downloadFREDSeries(seriesID, startDate, endDate)
-    url = sprintf('https://fred.stlouisfed.org/graph/fredgraph.csv?bgcolor=%%23e1e9f0&fo=open+sans&id=%s&cosd=%s&coed=%s', ...
-        seriesID, startDate, endDate);
-    tmpFile = [tempname '.csv'];
-    cleanUp = onCleanup(@() deleteIfExists(tmpFile)); %#ok<NASGU>
-    websave(tmpFile, url);
-
-    opts = detectImportOptions(tmpFile);
-    vnames = opts.VariableNames;
-    valIdx = find(~strcmpi(vnames, 'observation_date') & ~strcmpi(vnames, 'DATE'), 1);
-    if ~isempty(valIdx)
-        opts = setvartype(opts, vnames{valIdx}, 'string');
-    end
-    raw = readtable(tmpFile, opts);
-
-    if isempty(raw) || height(raw) < 1
+    % Uses FRED REST API — not the CDN-gated fredgraph.csv endpoint.
+    % Set env var FRED_API_KEY (free key from fred.stlouisfed.org/docs/api/api_key.html).
+    apiKey = strtrim(getenv('FRED_API_KEY'));
+    if isempty(apiKey)
+        fprintf('  [SKIP] %s — set env var FRED_API_KEY to enable FRED downloads.\n', seriesID);
         T = table(); return;
     end
+    T = callFredRestApi(apiKey, seriesID, startDate, endDate);
+end
 
-    if ismember('observation_date', raw.Properties.VariableNames)
-        dt = datetime(raw.observation_date);
-    elseif ismember('DATE', raw.Properties.VariableNames)
-        dt = datetime(raw.DATE);
-    else
-        dt = datetime(raw{:,1});
+%% ---- FRED REST API call ----
+function T = callFredRestApi(apiKey, seriesID, startDate, endDate)
+    url = sprintf( ...
+        'https://api.stlouisfed.org/fred/series/observations?series_id=%s&observation_start=%s&observation_end=%s&api_key=%s&file_type=json&units=lin', ...
+        seriesID, startDate, endDate, apiKey);
+    opts = weboptions('Timeout', 30, 'ContentType', 'json');
+    try
+        resp = webread(url, opts);
+    catch
+        T = table(); return;
     end
-
-    vn = raw.Properties.VariableNames;
-    valColIdx = ~strcmpi(vn, 'observation_date') & ~strcmpi(vn, 'DATE');
-    valColName = vn{find(valColIdx, 1)};
-    valRaw = raw.(valColName);
-    if isstring(valRaw) || iscell(valRaw)
-        valNum = str2double(valRaw);
-    else
-        valNum = double(valRaw);
+    if ~isfield(resp, 'observations') || isempty(resp.observations)
+        T = table(); return;
     end
-
-    good = isfinite(valNum) & ~isnat(dt);
-    T = table(dt(good), valNum(good), 'VariableNames', {'Date','Value'});
+    obs   = resp.observations;
+    dates = datetime({obs.date}, 'InputFormat', 'yyyy-MM-dd')';
+    vals  = str2double({obs.value})';  % FRED uses '.' for missing; str2double → NaN
+    good  = isfinite(vals) & ~isnat(dates);
+    T = table(dates(good), vals(good), 'VariableNames', {'Date','Value'});
     T = sortrows(T, 'Date');
 end
 
@@ -206,6 +197,3 @@ function aligned = forwardFill(srcDates, srcVals, targetDates)
     end
 end
 
-function deleteIfExists(f)
-    if exist(f, 'file'), delete(f); end
-end
