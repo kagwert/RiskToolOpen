@@ -108,6 +108,7 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
         CombLabel           matlab.ui.control.Label
         CombinedTable       matlab.ui.control.Table
         TELabel             matlab.ui.control.Label
+        TEMethodDropDown    matlab.ui.control.DropDown
         TETable             matlab.ui.control.Table
 
         % Bootstrap tab
@@ -243,6 +244,7 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
         SAA table = table()           % Asset, WeightPct, Description
         TAA table = table()           % Asset, DeltaPct, Description
         NormalizeCombined logical = true
+        TEMethod char = 'Var-Covar'   % TE calculation method: 'Var-Covar','Historical','Exp Weighted'
 
         % Measures for bootstrap
         Measures table = table()
@@ -439,7 +441,7 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             app.RiskFreeField = uieditfield(rfTargRow,'numeric','Value',app.RF,'ValueDisplayFormat','%.4f', ...
                 'ValueChangedFcn',@(s,e)setField(app,'RF',s.Value));
             uilabel(rfTargRow,'Text','Target:');
-            app.TargetRetField = uieditfield(rfTargRow,'numeric','Value',0,'Limits',[-Inf Inf],'ValueDisplayFormat','%.6f', ...
+            app.TargetRetField = uieditfield(rfTargRow,'numeric','Value',0,'Limits',[-Inf Inf],'ValueDisplayFormat','%.4f', ...
                 'ValueChangedFcn',@(s,e)setTargetRet(app,s.Value));
 
             boundsRow = uigridlayout(app.LeftGrid,[1 6]);
@@ -604,13 +606,13 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             app.ApplyTAAButton = uibutton(app.TAAButtonsGrid,'Text','Apply TAA -> Combined', ...
                 'ButtonPushedFcn',@(s,e)applyTAA(app),'BackgroundColor',[0.82 0.96 0.82],'FontWeight','bold');
             % Main TAA table
-            app.TAATable = uitable(app.TAAGrid,'Data',table(),'ColumnEditable',[true true true false true false false false],'FontSize',11);
-            app.TAATable.ColumnName = {'TradeGroup','Asset','DeltaPct','Leg','Description','TE_bps','EqBeta','USD_Sens'};
+            app.TAATable = uitable(app.TAAGrid,'Data',table(),'ColumnEditable',[true true true false true false false false false false],'FontSize',11);
+            app.TAATable.ColumnName = {'TradeGroup','Asset','DeltaPct','Leg','Description','Standalone_TE','Marginal_TE','DivBenefit','EqBeta','USD_Sens'};
             app.TAATable.CellEditCallback = @(s,e)onTAATableEdited(app);
             % Trade summary section
-            app.TAATradeLabel = uilabel(app.TAAGrid,'Text','Trade-Level Summary:','FontWeight','bold');
-            app.TAATradeTable = uitable(app.TAAGrid,'Data',table(),'ColumnEditable',false(1,5),'FontSize',11);
-            app.TAATradeTable.ColumnName = {'TradeGroup','Legs','TE_bps','EqBeta','USD_Sens'};
+            app.TAATradeLabel = uilabel(app.TAAGrid,'Text','Trade-Level Summary  (all TE in bps ann.):','FontWeight','bold');
+            app.TAATradeTable = uitable(app.TAAGrid,'Data',table(),'ColumnEditable',false(1,7),'FontSize',11);
+            app.TAATradeTable.ColumnName = {'TradeGroup','Legs','Standalone_TE','Marginal_TE','DivBenefit','EqBeta','USD_Sens'};
 
             % ===== Combined tab (7-row layout with FX split + analytics) =====
             app.CombGrid = uigridlayout(app.CombinedTab,[7 1]);
@@ -629,11 +631,18 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             % Row 5: Combined analytics
             app.CombAnalyticsText = uitextarea(app.CombGrid,'Editable','off','FontName','Consolas','FontSize',11, ...
                 'Value',{'Information Ratio: -   Hit Rate: -   ETL: -   CDaR: -'});
-            % Row 6: TE label
-            app.TELabel = uilabel(app.CombGrid,'Text','Tracking Error vs SAA:','FontWeight','bold');
+            % Row 6: TE label + method selector
+            teHeaderRow = uigridlayout(app.CombGrid,[1 2]);
+            teHeaderRow.ColumnWidth = {'1x','fit'}; teHeaderRow.Padding = [0 0 0 0]; teHeaderRow.ColumnSpacing = 8;
+            app.TELabel = uilabel(teHeaderRow,'Text','Tracking Error vs SAA:','FontWeight','bold');
+            app.TEMethodDropDown = uidropdown(teHeaderRow, ...
+                'Items',{'Var-Covar','Historical','Exp Weighted (λ=0.94)'}, ...
+                'Value','Var-Covar', ...
+                'Tooltip','Var-Covar: parametric Σ  |  Historical: actual active-return std  |  Exp Weighted: EWMA Σ λ=0.94', ...
+                'ValueChangedFcn',@(s,e)onTEMethodChanged(app,s.Value));
             % Row 7: TE table
-            app.TETable = uitable(app.CombGrid,'Data',table(),'ColumnEditable',[false false false],'FontSize',11);
-            app.TETable.ColumnName = {'Asset','ActiveWeight','TE_RC','TE_RC_Pct'};
+            app.TETable = uitable(app.CombGrid,'Data',table(),'ColumnEditable',false(1,4),'FontSize',11);
+            app.TETable.ColumnName = {'Asset','ActiveWt %','TE_RC bps','Share %'};
 
             % ===== Performance tab (3 charts + table) =====
             app.PerfGrid = uigridlayout(app.PerformanceTab,[5 1]);
@@ -2123,7 +2132,7 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
 
             lines = {
                 sprintf('Ann Return: %.2f%%   Ann Vol: %.2f%%   Sharpe: %.3f   Sortino: %.3f', mu_ann*100, vol_ann*100, sharpe_ann, sortino)
-                sprintf('VaR95: %.4f   CVaR95: %.4f   VaR99: %.4f   CVaR99: %.4f', VaR95, CVaR95, VaR99, CVaR99)
+                sprintf('VaR95: %.2f%%   CVaR95: %.2f%%   VaR99: %.2f%%   CVaR99: %.2f%%', VaR95*100, CVaR95*100, VaR99*100, CVaR99*100)
                 sprintf('Max Drawdown: %.2f%%   Obs: %d', maxDD*100, size(R,1))
                 sprintf('Funded weight: %.1f%%   FX overlay: %.1f%%', fundedPct, fxPct)
             };
@@ -2423,7 +2432,7 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
 
                 summaryLines = {
                     sprintf('Rows matched: %d  |  Paths: %d  |  Block: %d', sum(Midx), paths, block)
-                    sprintf('Ann. return: mean=%.4f  std=%.4f  |  Q[5/50/95%%]: %.4f / %.4f / %.4f', m, s, q(1), q(2), q(3))
+                    sprintf('Ann. return: mean=%.2f%%  std=%.2f%%  |  Q[5/50/95%%]: %.2f%% / %.2f%% / %.2f%%', m*100, s*100, q(1)*100, q(2)*100, q(3)*100)
                     sprintf('Top +corr: %s  |  Top -corr: %s', hi_list, lo_list)
                     };
                 app.BootstrapSummary.Value = [summaryLines(:); optLines(:)];
@@ -2575,13 +2584,13 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             lines = {
                 sprintf('Obs: %d   Assets: %d', size(R,1), size(R,2))
                 sprintf('Mean(per): %.6f   Vol: %.6f   Sharpe: %.3f', mu_p, sig_p, sharpe)
-                sprintf('Mean(ann): %.4f   Vol(ann): %.4f   Sharpe(ann): %.3f', mu_ann, vol_ann, sharpe_ann)
+                sprintf('Mean(ann): %.2f%%   Vol(ann): %.2f%%   Sharpe(ann): %.3f', mu_ann*100, vol_ann*100, sharpe_ann)
                 sprintf('Sortino(ann): %.3f   Calmar: %.3f', sortino_ann, calmar)
                 sprintf('Skewness: %.3f   Kurtosis: %.3f', sk, ku)
                 sprintf('Max Drawdown: %.2f%%', 100*maxDD)
-                sprintf('VaR @ %.1f%% (h=%d): %.4f   CVaR: %.4f   Method: %s', 100*alpha, h, VaR1, CVaR1, method)
-                sprintf('ES (hist): VaR90=%.4f CVaR90=%.4f | VaR95=%.4f CVaR95=%.4f | VaR99=%.4f CVaR99=%.4f', VaRs(1),CVaRs(1),VaRs(2),CVaRs(2),VaRs(3),CVaRs(3))
-                sprintf('rf(per): %.6f   Long-only: %d   Bounds [%.2f, %.2f]', app.RF, app.LongOnly, app.LB, app.UB)
+                sprintf('VaR @ %.1f%% (h=%d): %.2f%%   CVaR: %.2f%%   Method: %s', 100*alpha, h, VaR1*100, CVaR1*100, method)
+                sprintf('ES (hist): VaR90=%.2f%% CVaR90=%.2f%% | VaR95=%.2f%% CVaR95=%.2f%% | VaR99=%.2f%% CVaR99=%.2f%%', VaRs(1)*100,CVaRs(1)*100,VaRs(2)*100,CVaRs(2)*100,VaRs(3)*100,CVaRs(3)*100)
+                sprintf('rf(per): %.4f   Long-only: %d   Bounds [%.2f, %.2f]', app.RF, app.LongOnly, app.LB, app.UB)
                 };
             % Append scenario PnL lines directly (computed inline)
             scenLines = computeScenarioLines(app);
@@ -2600,135 +2609,208 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
 
         function updateTrackingError(app)
             if isempty(app.R) || isempty(app.W), return; end
-            Sigma = cov(app.R);
             w_saa = app.getSAAWeightsVector();
-            if isempty(w_saa) || numel(w_saa)~=numel(app.W), return; end
+            if isempty(w_saa) || numel(w_saa) ~= numel(app.W), return; end
             wdiff = app.W - w_saa;
-            per = app.annFactor();
-            TE2 = max(0, wdiff' * Sigma * wdiff);
-            TE_per = sqrt(TE2);
-            TE_ann = TE_per * sqrt(per);
+            per   = app.annFactor();
 
-            m = Sigma * wdiff;               % marginal (variance) contributions
-            RC = wdiff .* m;                 % variance contributions
-            share = zeros(size(RC));
-            if TE2>0, share = RC / TE2; end
+            method = app.TEMethod;
+            if app.uiValid(app.TEMethodDropDown)
+                method = app.TEMethodDropDown.Value;
+                app.TEMethod = method;
+            end
 
-            app.TELabel.Text = sprintf('Tracking Error vs SAA (annualized): %.4f', TE_ann);
-            app.TETable.Data = table(app.AssetNames(:), wdiff(:), RC(:), share(:), ...
-                                     'VariableNames',{'Asset','ActiveWeight','TE_RC','TE_RC_Pct'});
+            % Build covariance matrix according to method
+            switch method
+                case 'Historical'
+                    % TE from realised active-return std
+                    activeRet = app.R * wdiff;
+                    TE_ann    = std(activeRet) * sqrt(per);
+                    % Euler attribution: cov(r_i*wdiff_i, activeRet)/std(activeRet)
+                    Sigma     = cov(app.R);  % still use for attribution
+                case 'Exp Weighted (λ=0.94)'
+                    Sigma  = PortfolioRiskOptimizerApp.ewcov(app.R, 0.94);
+                    TE2    = max(0, wdiff' * Sigma * wdiff);
+                    TE_ann = sqrt(TE2) * sqrt(per);
+                otherwise  % 'Var-Covar'
+                    Sigma  = cov(app.R);
+                    TE2    = max(0, wdiff' * Sigma * wdiff);
+                    TE_ann = sqrt(TE2) * sqrt(per);
+            end
+
+            % Euler risk attribution (variance-based, consistent across methods)
+            TE2_attr = max(1e-20, wdiff' * Sigma * wdiff);
+            m     = Sigma * wdiff;
+            RC    = wdiff .* m;           % variance contributions
+            share = RC / TE2_attr;        % % of TE variance
+
+            % Display — ActiveWt as %, TE_RC in bps (annualised), Share as %
+            RC_bps = RC / sqrt(TE2_attr) * sqrt(per) * 10000;  % Euler → bps
+            app.TELabel.Text = sprintf('Tracking Error vs SAA (ann.):  %.2f%%   [%s]', TE_ann*100, method);
+            app.TETable.Data = table( ...
+                app.AssetNames(:), ...
+                round(wdiff(:)*100, 2), ...
+                round(RC_bps(:),    1), ...
+                round(share(:)*100, 1), ...
+                'VariableNames',{'Asset','ActiveWt_pct','TE_RC_bps','Share_pct'});
+        end
+
+        function onTEMethodChanged(app, ~)
+            updateTrackingError(app);
         end
 
         function updateTAAMetrics(app)
-            % Populate TE_bps, EqBeta, USD_Sens columns in TAATable
+            % Populate risk columns in TAATable and TAATradeTable.
+            % Columns: Standalone_TE, Marginal_TE, DivBenefit (all bps ann.), EqBeta, USD_Sens.
+            %
+            % Standalone_TE  — TE if this position/trade were the ONLY active deviation.
+            % Marginal_TE    — Incremental contribution to total TE: TE_all - TE_without_this.
+            % DivBenefit     — Standalone - Marginal: positive = trade diversifies the book.
             Tcur = app.TAATable.Data;
             if isempty(Tcur) || ~istable(Tcur) || height(Tcur) == 0, return; end
             if isempty(app.R) || isempty(app.AssetNames), return; end
 
-            R = app.R;
+            R     = app.R;
             names = app.AssetNames;
-            Sigma = cov(R);
-            per = app.annFactor();
+            per   = app.annFactor();
+
+            method = app.TEMethod;
+            if app.uiValid(app.TEMethodDropDown), method = app.TEMethodDropDown.Value; end
+            switch method
+                case 'Exp Weighted (λ=0.94)'
+                    Sigma = PortfolioRiskOptimizerApp.ewcov(R, 0.94);
+                case 'Historical'
+                    Sigma = cov(R);  % attribution uses Sigma even in historical mode
+                otherwise
+                    Sigma = cov(R);
+            end
+
             w_saa = app.getSAAWeightsVector();
             if isempty(w_saa) || numel(w_saa) ~= size(R,2)
                 w_saa = zeros(size(R,2),1);
             end
 
-            % Find equity and USD reference columns
-            eqIdx = find(strcmp(names, 'Equity_US'), 1);
-            usdIdx = find(strcmp(names, 'USD_Cash'), 1);
+            % Full active-weight vector across ALL TAA positions
+            wdiff_all = app.W - w_saa;
+            TE_all = sqrt(max(0, wdiff_all' * Sigma * wdiff_all)) * sqrt(per);  % ann. fraction
 
-            nRows = height(Tcur);
-            te_bps = zeros(nRows, 1);
-            eqBeta = zeros(nRows, 1);
-            usdSens = zeros(nRows, 1);
+            eqIdx  = find(strcmp(names, 'Equity_US'), 1);
+            usdIdx = find(strcmp(names, 'USD_Cash'),  1);
+
+            nRows       = height(Tcur);
+            standalone  = zeros(nRows, 1);
+            marginal    = zeros(nRows, 1);
+            divbenefit  = zeros(nRows, 1);
+            eqBeta      = zeros(nRows, 1);
+            usdSens     = zeros(nRows, 1);
 
             for i = 1:nRows
-                a = string(Tcur.Asset(i));
+                a    = string(Tcur.Asset(i));
                 aIdx = find(strcmp(names, a), 1);
                 if isempty(aIdx), continue; end
 
                 delta = 0;
                 if ismember('DeltaPct', Tcur.Properties.VariableNames)
-                    delta = Tcur.DeltaPct(i) / 100; % fraction
+                    delta = Tcur.DeltaPct(i) / 100;
                 end
 
-                % Marginal TE: impact of this delta on tracking error vs SAA
-                % TE = sqrt(wdiff' * Sigma * wdiff) where wdiff includes this delta
-                wdiff_base = zeros(size(R,2), 1); % other deltas excluded for marginal
-                wdiff_base(aIdx) = delta;
-                te_var = max(0, wdiff_base' * Sigma * wdiff_base);
-                te_bps(i) = sqrt(te_var) * sqrt(per) * 10000; % annualized bps
+                % Standalone: only this single position active
+                wi            = zeros(size(R,2), 1);
+                wi(aIdx)      = delta;
+                standalone(i) = sqrt(max(0, wi' * Sigma * wi)) * sqrt(per) * 10000;
 
-                % Equity beta: cov(asset, equity) / var(equity)
+                % Marginal: TE_all - TE_without_this_position
+                w_without         = wdiff_all;
+                w_without(aIdx)   = w_without(aIdx) - delta;
+                TE_without        = sqrt(max(0, w_without' * Sigma * w_without)) * sqrt(per);
+                marginal(i)       = (TE_all - TE_without) * 10000;
+
+                % Diversification benefit (positive = diversifying)
+                divbenefit(i) = standalone(i) - marginal(i);
+
+                % Equity beta
                 if ~isempty(eqIdx)
                     eqBeta(i) = Sigma(aIdx, eqIdx) / max(1e-20, Sigma(eqIdx, eqIdx));
                 end
-
-                % USD sensitivity: cov(asset, USD_Cash) / var(USD_Cash)
+                % USD sensitivity
                 if ~isempty(usdIdx)
                     usdSens(i) = Sigma(aIdx, usdIdx) / max(1e-20, Sigma(usdIdx, usdIdx));
                 end
             end
 
-            Tcur.TE_bps = round(te_bps, 1);
-            Tcur.EqBeta = round(eqBeta, 3);
-            Tcur.USD_Sens = round(usdSens, 3);
-            app.TAATable.Data = Tcur;
+            Tcur.Standalone_TE = round(standalone, 1);
+            Tcur.Marginal_TE   = round(marginal,   1);
+            Tcur.DivBenefit    = round(divbenefit,  1);
+            Tcur.EqBeta        = round(eqBeta,      2);
+            Tcur.USD_Sens      = round(usdSens,     2);
+            app.TAATable.Data  = Tcur;
 
             % ---- Trade-level summary ----
             if ~ismember('TradeGroup', Tcur.Properties.VariableNames)
-                app.TAATradeTable.Data = table();
-                return;
+                app.TAATradeTable.Data = table(); return;
             end
             groups = unique(Tcur.TradeGroup);
-            groups = groups(strlength(groups) > 0); % skip empty
+            groups = groups(strlength(groups) > 0);
             if isempty(groups)
-                app.TAATradeTable.Data = table();
-                return;
+                app.TAATradeTable.Data = table(); return;
             end
-            nG = numel(groups);
-            tLegs = strings(nG,1);
-            tTE = zeros(nG,1);
-            tBeta = zeros(nG,1);
-            tUSD = zeros(nG,1);
+
+            nG      = numel(groups);
+            tLegs   = strings(nG,1);
+            tSA     = zeros(nG,1);
+            tMarg   = zeros(nG,1);
+            tDiv    = zeros(nG,1);
+            tBeta   = zeros(nG,1);
+            tUSD    = zeros(nG,1);
+
+            % Build per-trade wdiff vectors first (needed for marginal calc)
+            tradeWdiff = cell(nG, 1);
             for gi = 1:nG
                 mask = Tcur.TradeGroup == groups(gi);
                 rows = Tcur(mask,:);
-                % Build combined delta weight vector for this trade
-                wdiff_trade = zeros(size(R,2), 1);
+                wt   = zeros(size(R,2), 1);
                 legParts = strings(0,1);
                 for ri = 1:height(rows)
-                    a = string(rows.Asset(ri));
+                    a    = string(rows.Asset(ri));
                     aIdx = find(strcmp(names, a), 1);
                     if isempty(aIdx), continue; end
                     d = rows.DeltaPct(ri) / 100;
-                    wdiff_trade(aIdx) = wdiff_trade(aIdx) + d;
-                    if d > 0
-                        legParts(end+1) = "L:" + a; %#ok<AGROW>
-                    elseif d < 0
-                        legParts(end+1) = "S:" + a; %#ok<AGROW>
-                    end
+                    wt(aIdx) = wt(aIdx) + d;
+                    if d > 0,      legParts(end+1) = "L:" + a; %#ok<AGROW>
+                    elseif d < 0,  legParts(end+1) = "S:" + a; end %#ok<AGROW>
                 end
-                tLegs(gi) = strjoin(legParts, " / ");
-                % Combined TE
-                te_var_trade = max(0, wdiff_trade' * Sigma * wdiff_trade);
-                tTE(gi) = round(sqrt(te_var_trade) * sqrt(per) * 10000, 1);
-                % Combined equity beta: weighted average of per-asset betas by leg direction
-                % Normalize by sum of absolute deltas so beta reflects the trade, not the weight
-                sumAbsD = sum(abs(wdiff_trade));
+                tradeWdiff{gi} = wt;
+                tLegs(gi)      = strjoin(legParts, " / ");
+            end
+
+            for gi = 1:nG
+                wt = tradeWdiff{gi};
+
+                % Standalone TE for this trade (in isolation)
+                tSA(gi) = round(sqrt(max(0, wt' * Sigma * wt)) * sqrt(per) * 10000, 1);
+
+                % Marginal: TE_all - TE_without_this_trade
+                w_other   = wdiff_all - wt;
+                TE_other  = sqrt(max(0, w_other' * Sigma * w_other)) * sqrt(per);
+                tMarg(gi) = round((TE_all - TE_other) * 10000, 1);
+
+                % Diversification benefit
+                tDiv(gi) = round(tSA(gi) - tMarg(gi), 1);
+
+                % Equity beta (delta-weighted average)
+                sumAbsD = sum(abs(wt));
                 if ~isempty(eqIdx) && sumAbsD > 1e-12
                     assetBetas = Sigma(:, eqIdx) / max(1e-20, Sigma(eqIdx, eqIdx));
-                    tBeta(gi) = round((wdiff_trade' * assetBetas) / (sumAbsD / 2), 3);
+                    tBeta(gi)  = round((wt' * assetBetas) / (sumAbsD / 2), 2);
                 end
-                % Combined USD sensitivity: same normalization
                 if ~isempty(usdIdx) && sumAbsD > 1e-12
-                    assetUSD = Sigma(:, usdIdx) / max(1e-20, Sigma(usdIdx, usdIdx));
-                    tUSD(gi) = round((wdiff_trade' * assetUSD) / (sumAbsD / 2), 3);
+                    assetUSD  = Sigma(:, usdIdx) / max(1e-20, Sigma(usdIdx, usdIdx));
+                    tUSD(gi)  = round((wt' * assetUSD) / (sumAbsD / 2), 2);
                 end
             end
-            app.TAATradeTable.Data = table(groups(:), tLegs(:), tTE(:), tBeta(:), tUSD(:), ...
-                'VariableNames',{'TradeGroup','Legs','TE_bps','EqBeta','USD_Sens'});
+
+            app.TAATradeTable.Data = table(groups(:), tLegs(:), tSA(:), tMarg(:), tDiv(:), tBeta(:), tUSD(:), ...
+                'VariableNames',{'TradeGroup','Legs','Standalone_TE','Marginal_TE','DivBenefit','EqBeta','USD_Sens'});
         end
 
               function updatePerformanceTable(app)
@@ -3671,7 +3753,7 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             lines = {
                 sprintf('Information Ratio: %.3f   Hit Rate: %.1f%%', IR, hitRate)
                 sprintf('Active Return (ann): %.2f%%   Tracking Error (ann): %.2f%%', muActive*100, teActive*100)
-                sprintf('ETL (CVaR95 on active): %.4f   CDaR (95%%): %.2f%%', ETL, CDaR*100)
+                sprintf('ETL (CVaR95 on active): %.2f%%   CDaR (95%%): %.2f%%', ETL*100, CDaR*100)
             };
             if app.uiValid(app.CombAnalyticsText), app.CombAnalyticsText.Value = lines; end
         end
@@ -4925,6 +5007,19 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             if exist(f, 'file') == 2
                 delete(f);
             end
+        end
+
+        function S = ewcov(R, lambda)
+            % Exponentially-weighted covariance matrix.
+            % Recent observations receive weight lambda^0; oldest receive lambda^(T-1).
+            [T, N] = size(R);
+            if T < 2, S = eye(N); return; end
+            w  = lambda .^ (T-1:-1:0)';
+            w  = w / sum(w);
+            mu = w' * R;
+            Rc = R - repmat(mu, T, 1);
+            S  = Rc' * diag(w) * Rc;
+            S  = (S + S') / 2;  % enforce symmetry
         end
     end
 end
