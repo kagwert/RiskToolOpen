@@ -1264,8 +1264,8 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                     otherwise,      bbgFreq = 'DAILY';
                 end
 
-                d1 = datenum(app.StartDateField.Value, 'yyyymmdd'); %#ok<DATEFUN>
-                d2 = datenum(app.EndDateField.Value,   'yyyymmdd'); %#ok<DATEFUN>
+                d1 = datestr(datetime(app.StartDateField.Value, 'InputFormat', 'yyyyMMdd'), 'mm/dd/yyyy'); %#ok<DATST>
+                d2 = datestr(datetime(app.EndDateField.Value,   'InputFormat', 'yyyyMMdd'), 'mm/dd/yyyy'); %#ok<DATST>
 
                 app.StatusLabel.Text = 'Connecting to Bloomberg...'; drawnow;
                 c = blp;
@@ -1370,8 +1370,8 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                         'Bloomberg Macro'); return;
                 end
 
-                d1 = datenum(app.StartDateField.Value, 'yyyymmdd'); %#ok<DATEFUN>
-                d2 = datenum(app.EndDateField.Value,   'yyyymmdd'); %#ok<DATEFUN>
+                d1 = datestr(datetime(app.StartDateField.Value, 'InputFormat', 'yyyyMMdd'), 'mm/dd/yyyy'); %#ok<DATST>
+                d2 = datestr(datetime(app.EndDateField.Value,   'InputFormat', 'yyyyMMdd'), 'mm/dd/yyyy'); %#ok<DATST>
 
                 app.StatusLabel.Text = 'Connecting to Bloomberg for macro data...'; drawnow;
                 c = blp;
