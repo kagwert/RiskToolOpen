@@ -1960,11 +1960,8 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
                 a = string(sel{i});
                 if ~any(strcmp(Tcur.Asset, a))
                     newRow = table("", a, 0.0, "", "", 'VariableNames',{'TradeGroup','Asset','DeltaPct','Leg','Description'});
-                    % Pad with metric columns if they already exist
-                    for mc = {'TE_bps','EqBeta','USD_Sens'}
-                        if ismember(mc{1}, Tcur.Properties.VariableNames)
-                            newRow.(mc{1}) = 0;
-                        end
+                    for mc = setdiff(Tcur.Properties.VariableNames, newRow.Properties.VariableNames)
+                        newRow.(mc{1}) = 0;
                     end
                     Tcur = [Tcur; newRow]; %#ok<AGROW>
                 end
@@ -1998,7 +1995,9 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             Tcur = app.TAATable.Data;
             if isempty(Tcur) || ~istable(Tcur)
                 Tcur = table(strings(0,1), string.empty(0,1), zeros(0,1), strings(0,1), strings(0,1), ...
-                    'VariableNames',{'TradeGroup','Asset','DeltaPct','Leg','Description'});
+                    zeros(0,1), zeros(0,1), zeros(0,1), zeros(0,1), zeros(0,1), ...
+                    'VariableNames',{'TradeGroup','Asset','DeltaPct','Leg','Description', ...
+                                     'Standalone_TE','Marginal_TE','DivBenefit','EqBeta','USD_Sens'});
             end
             % Auto-name: find max trade number
             maxNum = 0;
@@ -2013,11 +2012,8 @@ classdef PortfolioRiskOptimizerApp < matlab.apps.AppBase
             shortAsset = string(sel{2});
             longRow  = table(tName, longAsset,  1.0, "Long",  "", 'VariableNames',{'TradeGroup','Asset','DeltaPct','Leg','Description'});
             shortRow = table(tName, shortAsset, -1.0, "Short", "", 'VariableNames',{'TradeGroup','Asset','DeltaPct','Leg','Description'});
-            % Pad with metric columns
-            for mc = {'TE_bps','EqBeta','USD_Sens'}
-                if ismember(mc{1}, Tcur.Properties.VariableNames)
-                    longRow.(mc{1}) = 0; shortRow.(mc{1}) = 0;
-                end
+            for mc = setdiff(Tcur.Properties.VariableNames, longRow.Properties.VariableNames)
+                longRow.(mc{1}) = 0; shortRow.(mc{1}) = 0;
             end
             Tcur = [Tcur; longRow; shortRow]; %#ok<AGROW>
             app.TAATable.Data = Tcur;
